@@ -101,6 +101,15 @@ Register-Me3Module @{
     Uninstall = {
         param($ctx, $st)
         Remove-IfPresent (Join-Path $ctx.Me3Profiles 'eldenring-ersc') 'Seamless Co-op' | Out-Null
+
+        # A l'execution, crashpad cree <jeu>\SeamlessCoop\crashdumps\ : ce chemin
+        # n'est pas dans le package, il tombe donc sur le disque reel. On nettoie,
+        # mais jamais une installation manuelle de l'utilisateur : la presence
+        # d'ersc.dll signale que ce dossier ne nous appartient pas.
+        $stray = Join-Path $ctx.GamePath 'SeamlessCoop'
+        if ((Test-Path $stray) -and -not (Get-ChildItem $stray -Recurse -Filter 'ersc.dll' -ErrorAction SilentlyContinue)) {
+            Remove-IfPresent $stray 'SeamlessCoop\ (crashdumps generes a l''execution)' | Out-Null
+        }
     }
 
     ProfileToml = {
