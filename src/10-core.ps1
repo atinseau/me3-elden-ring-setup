@@ -239,6 +239,50 @@ function Invoke-Elevated {
     }
 }
 
+# ---------------------------------------------------------------------------- #
+#  Resolution d'une release GitHub
+#
+#  Epingler une URL de telechargement condamne le module a se perimer. Les mods
+#  qui refusent de demarrer quand une version plus recente existe (Seamless
+#  Co-op le fait) doivent pouvoir suivre automatiquement.
+# ---------------------------------------------------------------------------- #
+
+function Get-GitHubReleaseAsset {
+    <#
+        Retourne @{ Url; File; Kind; Sha256; Version } pour une release GitHub.
+        $Tag vaut 'latest' ou un tag precis.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Repo,
+        [string]$Tag = 'latest',
+        [string]$Pattern = '\.zip$'
+    )
+
+    if ($Tag -eq 'latest') { $api = "https://api.github.com/repos/$Repo/releases/latest" }
+    else { $api = "https://api.github.com/repos/$Repo/releases/tags/$Tag" }
+
+    $old = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+    try {
+        $rel = Invoke-RestMethod $api -Headers @{ 'User-Agent' = 'me3-elden-ring-setup' }
+    }
+    catch {
+        Fail "impossible d'interroger les releases de $Repo ($Tag) : $($_.Exception.Message)"
+    }
+    finally { $ProgressPreference = $old }
+
+    $asset = @($rel.assets | Where-Object { $_.name -match $Pattern }) | Select-Object -First 1
+    if (-not $asset) { Fail "aucune archive correspondant a '$Pattern' dans la release $($rel.tag_name) de $Repo" }
+
+    return @{
+        Url     = $asset.browser_download_url
+        File    = $asset.name
+        Kind    = 'zip'
+        Sha256  = $null
+        Version = $rel.tag_name
+    }
+}
+
 # Execute un exe natif en capturant sa sortie sans utiliser de redirection.
 # En Windows PowerShell 5.1, "2>$null" sur un exe natif emballe chaque ligne de
 # stderr dans un ErrorRecord (NativeCommandError) et fait echouer l'appel, alors

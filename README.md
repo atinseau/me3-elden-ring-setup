@@ -116,28 +116,25 @@ La mise en relation se fait par un mot de passe partagé, sans matchmaking.
 c'est lui qui décide qui rejoint quelle partie. Et `ErscArchive`, optionnel —
 voir ci-dessous.
 
-#### Si le mod se déclare périmé
+#### Version : résolue automatiquement
 
-Seamless Co-op embarque un contrôle de version : dès qu'une version plus récente
-existe, il refuse de démarrer avec un message du type *« This version of Seamless
-Co-op is out of date »*. Ce n'est pas lié à la version du jeu.
+Seamless Co-op embarque un contrôle de version et refuse de démarrer dès qu'une
+version plus récente existe — message *« This version of Seamless Co-op is out of
+date »*. Épingler une version dans le code condamnerait donc l'installeur à se
+périmer.
 
-Son seul canal officiel est Nexus Mods, qui publie avant le miroir GitHub et
-**interdit le téléchargement automatisé**. L'installeur ne peut donc pas toujours
-récupérer la dernière version tout seul. Dans ce cas :
+`ErscVersion` vaut `latest` par défaut : la dernière version publiée est résolue
+à l'exécution depuis le dépôt officiel, à chaque installation ou réparation.
 
-1. Télécharge l'archive depuis [la page Nexus](https://www.nexusmods.com/eldenring/mods/510/?tab=files)
-   avec **Manual Download** (un compte gratuit suffit)
-2. Renseigne son chemin dans le champ *Archive .zip* de l'assistant, ou en CLI :
+Si ta version du jeu demande une version plus ancienne du mod, mets un tag précis :
 
 ```powershell
-.\me3-elden-ring-setup.ps1 -Mode Repair -NoGui `
-    -Option @{ ErscArchive = 'C:\Users\toi\Downloads\SeamlessCoop.zip' }
+.\me3-elden-ring-setup.ps1 -Mode Repair -NoGui -Option @{ ErscVersion = 'v1.9.0' }
 ```
 
-L'installeur localise `ersc.dll` dans l'archive quelle que soit son arborescence,
-puis déploie le dossier normalement. Tous les joueurs doivent utiliser la même
-version.
+Tous les joueurs doivent utiliser la même. En dernier recours, si le miroir prend
+du retard sur Nexus, `ErscArchive` accepte le chemin d'une archive téléchargée à
+la main — l'installeur y localise `ersc.dll` quelle que soit son arborescence.
 
 ---
 

@@ -11,7 +11,7 @@
 Register-Me3Module @{
     Key     = 'seamless-coop'
     Name    = 'Seamless Co-op'
-    Version = 'v1.9.8'
+    Version = 'derniere publiee'
     Summary = 'Remplace le P2P du jeu : jusqu''a 6 joueurs, sans mur de brouillard ni deconnexion apres un boss. Session privee par mot de passe.'
     Url     = 'https://github.com/LukeYui/EldenRingSeamlessCoopRelease'
     Default = $true
@@ -29,23 +29,29 @@ Register-Me3Module @{
             Help    = 'Decide qui rejoint quelle partie. Doit etre STRICTEMENT identique chez tous les joueurs.'
         }
         @{
+            Key     = 'ErscVersion'
+            Label   = 'Version'
+            Type    = 'string'
+            Default = 'latest'
+            Shared  = $true
+            Help    = '"latest" prend la derniere version publiee sur le miroir officiel. Mets un tag precis (par exemple v1.9.0) si ta version du jeu demande une version plus ancienne. Tous les joueurs doivent avoir la meme.'
+        }
+        @{
             Key     = 'ErscArchive'
-            Label   = 'Archive .zip (optionnel)'
+            Label   = 'Archive .zip (secours)'
             Type    = 'string'
             Default = ''
             Shared  = $true
-            Help    = 'Chemin d''une archive Seamless Co-op telechargee a la main. A utiliser quand le mod refuse de demarrer en se declarant perime : Nexus publie avant le miroir GitHub, et interdit le telechargement automatise. Laisse vide pour utiliser la version epinglee.'
+            Help    = 'Chemin d''une archive telechargee a la main depuis Nexus. Utile seulement si le miroir GitHub prend du retard sur Nexus. Laisse vide dans tous les autres cas.'
         }
     )
 
-    Downloads = @{
-        main = @{
-            Url    = 'https://github.com/LukeYui/EldenRingSeamlessCoopRelease/releases/download/v1.9.8/Seamless.Co-op.v1.9.8-510-1-9-8-1776128433.zip'
-            File   = 'SeamlessCoop-v1.9.8.zip'
-            Kind   = 'zip'
-            Sha256 = $null
-        }
-    }
+    # Le depot officiel du mod, sous le nom actuel du compte de son auteur
+    # (anciennement LukeYui). La version n'est pas epinglee : elle est resolue
+    # a l'execution, sinon le module se perimerait a chaque publication.
+    Repo = 'yuiamoroll/EldenRingSeamlessCoopRelease'
+
+    Downloads = @{}
 
     Install = {
         param($ctx)
@@ -53,12 +59,11 @@ Register-Me3Module @{
         $m = Get-Me3Module 'seamless-coop'
 
         # ERSC embarque un controle de version et refuse de demarrer en se
-        # declarant perime des qu'une version plus recente existe. Or Nexus est
-        # son seul canal officiel, publie avant le miroir GitHub, et bloque tout
-        # telechargement automatise. On accepte donc une archive fournie a la
-        # main pour ne pas dependre du miroir.
+        # declarant perime des qu'une version plus recente existe. La version
+        # est donc resolue a l'execution, jamais epinglee dans le code.
         $archive = "$($ctx.Options.ErscArchive)".Trim()
-        $version = $m.Version
+        $wanted = "$($ctx.Options.ErscVersion)".Trim()
+        if (-not $wanted) { $wanted = 'latest' }
 
         if ($archive) {
             if (-not (Test-Path -LiteralPath $archive)) { Fail "archive Seamless Co-op introuvable : $archive" }
@@ -67,7 +72,10 @@ Register-Me3Module @{
             $src = Expand-Download @{ Kind = 'zip'; File = (Split-Path $archive -Leaf) } $archive $m.Key
         }
         else {
-            $src = Expand-Download $m.Downloads.main (Get-Download $m.Downloads.main "$($m.Name) $($m.Version)") $m.Key
+            $dl = Get-GitHubReleaseAsset -Repo $m.Repo -Tag $wanted
+            $version = $dl.Version
+            if ($wanted -eq 'latest') { Write-Log "derniere version publiee : $version" }
+            $src = Expand-Download $dl (Get-Download $dl "$($m.Name) $version") $m.Key
         }
 
         # L'arborescence varie selon la provenance de l'archive : on localise le
