@@ -89,9 +89,10 @@ function Show-SetupWizard {
     if (-not (Test-GamePath $detected)) { $detected = Find-GamePath }
     $st.GameDir = "$detected"
 
+    # Filtre : l'etat peut mentionner un module retire de l'installeur depuis.
     $priorKeys = @()
     if ($st.State -and $st.State.PSObject.Properties['modules']) {
-        $priorKeys = @((ConvertTo-Hashtable $st.State.modules).Keys)
+        $priorKeys = @(Select-KnownModuleKeys @((ConvertTo-Hashtable $st.State.modules).Keys))
     }
     $priorOptions = @{}
     if ($st.State -and $st.State.PSObject.Properties['options']) {

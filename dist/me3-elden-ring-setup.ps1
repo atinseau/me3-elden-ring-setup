@@ -760,6 +760,32 @@ function Resolve-ModuleSelection {
     return @(Get-AllModules | Where-Object { $wanted.Contains($_.Key) })
 }
 
+function Select-KnownModuleKeys {
+    <#
+        Filtre des cles venant de l'etat enregistre, qui peut mentionner un
+        module retire de l'installeur depuis. Un module disparu ne doit pas
+        empecher de reparer les autres : on l'ignore en le signalant.
+
+        A ne pas utiliser pour les cles saisies par l'utilisateur : la, une cle
+        inconnue est une faute de frappe et doit echouer franchement.
+    #>
+    param([string[]]$Keys, [string]$Context = "l'etat enregistre")
+
+    $known = New-Object System.Collections.Generic.List[string]
+    foreach ($k in @($Keys)) {
+        if (-not $k) { continue }
+        $key = $k.Trim().ToLower()
+        if (Get-Me3Module $key) {
+            $known.Add($key)
+        }
+        else {
+            Write-Log "module '$key' present dans $Context mais inconnu de cette version : ignore" -Level Warn
+            Write-Log "ses fichiers ne seront pas touches ; installe une version de l'installeur qui le connait pour le retirer proprement." -Level Warn
+        }
+    }
+    return @($known)
+}
+
 function Get-ModuleOptionDefaults {
     <# Fusionne les valeurs par defaut de tous les modules donnes. #>
     param([object[]]$ModuleList)
@@ -1311,7 +1337,11 @@ Register-Me3Module @{
         $m = Get-Me3Module 'unlock-fps'
         $src = Expand-Download $m.Downloads.main (Get-Download $m.Downloads.main "$($m.Name) $($m.Version)") $m.Key
 
+        # Le dossier est vide avant deploiement : sans cela, les fichiers d'une
+        # version precedente qui n'existent plus dans la nouvelle resteraient en
+        # place. Le .ini est reecrit juste apres, rien d'utile n'est perdu.
         $dst = Join-Path $ctx.Me3Profiles 'eldenring-natives\UnlockTheFps'
+        Remove-IfPresent $dst | Out-Null
         New-Item -ItemType Directory -Force $dst | Out-Null
         foreach ($f in @('UnlockTheFps.dll', 'LICENSE.md', 'THIRD_PARTY_NOTICES.md', 'RELEASE_NOTES.md')) {
             $p = Join-Path $src $f
@@ -1733,9 +1763,10 @@ function Show-SetupWizard {
     if (-not (Test-GamePath $detected)) { $detected = Find-GamePath }
     $st.GameDir = "$detected"
 
+    # Filtre : l'etat peut mentionner un module retire de l'installeur depuis.
     $priorKeys = @()
     if ($st.State -and $st.State.PSObject.Properties['modules']) {
-        $priorKeys = @((ConvertTo-Hashtable $st.State.modules).Keys)
+        $priorKeys = @(Select-KnownModuleKeys @((ConvertTo-Hashtable $st.State.modules).Keys))
     }
     $priorOptions = @{}
     if ($st.State -and $st.State.PSObject.Properties['options']) {
@@ -2271,11 +2302,14 @@ if ($prior) {
     if ($prior.PSObject.Properties['options']) { $priorOptions = ConvertTo-Hashtable $prior.options }
 }
 
+# Les cles venant de l'etat sont filtrees : un module retire de l'installeur
+# depuis la derniere fois ne doit pas faire echouer toute l'operation.
 if ($AllModules) { $keys = @(Get-AllModules | ForEach-Object { $_.Key }) }
 elseif ($Modules) { $keys = $Modules }
-elseif ($Mode -eq 'Repair' -and $priorKeys.Count) { $keys = $priorKeys }
-elseif ($priorKeys.Count) { $keys = $priorKeys }
+elseif ($priorKeys.Count) { $keys = Select-KnownModuleKeys $priorKeys }
 else { $keys = Get-DefaultModuleKeys }
+
+if (-not $keys.Count) { $keys = Get-DefaultModuleKeys }
 
 $selected = @(Resolve-ModuleSelection $keys)
 

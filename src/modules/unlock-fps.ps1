@@ -39,7 +39,11 @@ Register-Me3Module @{
         $m = Get-Me3Module 'unlock-fps'
         $src = Expand-Download $m.Downloads.main (Get-Download $m.Downloads.main "$($m.Name) $($m.Version)") $m.Key
 
+        # Le dossier est vide avant deploiement : sans cela, les fichiers d'une
+        # version precedente qui n'existent plus dans la nouvelle resteraient en
+        # place. Le .ini est reecrit juste apres, rien d'utile n'est perdu.
         $dst = Join-Path $ctx.Me3Profiles 'eldenring-natives\UnlockTheFps'
+        Remove-IfPresent $dst | Out-Null
         New-Item -ItemType Directory -Force $dst | Out-Null
         foreach ($f in @('UnlockTheFps.dll', 'LICENSE.md', 'THIRD_PARTY_NOTICES.md', 'RELEASE_NOTES.md')) {
             $p = Join-Path $src $f

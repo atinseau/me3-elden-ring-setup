@@ -107,6 +107,32 @@ function Resolve-ModuleSelection {
     return @(Get-AllModules | Where-Object { $wanted.Contains($_.Key) })
 }
 
+function Select-KnownModuleKeys {
+    <#
+        Filtre des cles venant de l'etat enregistre, qui peut mentionner un
+        module retire de l'installeur depuis. Un module disparu ne doit pas
+        empecher de reparer les autres : on l'ignore en le signalant.
+
+        A ne pas utiliser pour les cles saisies par l'utilisateur : la, une cle
+        inconnue est une faute de frappe et doit echouer franchement.
+    #>
+    param([string[]]$Keys, [string]$Context = "l'etat enregistre")
+
+    $known = New-Object System.Collections.Generic.List[string]
+    foreach ($k in @($Keys)) {
+        if (-not $k) { continue }
+        $key = $k.Trim().ToLower()
+        if (Get-Me3Module $key) {
+            $known.Add($key)
+        }
+        else {
+            Write-Log "module '$key' present dans $Context mais inconnu de cette version : ignore" -Level Warn
+            Write-Log "ses fichiers ne seront pas touches ; installe une version de l'installeur qui le connait pour le retirer proprement." -Level Warn
+        }
+    }
+    return @($known)
+}
+
 function Get-ModuleOptionDefaults {
     <# Fusionne les valeurs par defaut de tous les modules donnes. #>
     param([object[]]$ModuleList)

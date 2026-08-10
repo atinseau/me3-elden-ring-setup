@@ -51,11 +51,14 @@ if ($prior) {
     if ($prior.PSObject.Properties['options']) { $priorOptions = ConvertTo-Hashtable $prior.options }
 }
 
+# Les cles venant de l'etat sont filtrees : un module retire de l'installeur
+# depuis la derniere fois ne doit pas faire echouer toute l'operation.
 if ($AllModules) { $keys = @(Get-AllModules | ForEach-Object { $_.Key }) }
 elseif ($Modules) { $keys = $Modules }
-elseif ($Mode -eq 'Repair' -and $priorKeys.Count) { $keys = $priorKeys }
-elseif ($priorKeys.Count) { $keys = $priorKeys }
+elseif ($priorKeys.Count) { $keys = Select-KnownModuleKeys $priorKeys }
 else { $keys = Get-DefaultModuleKeys }
+
+if (-not $keys.Count) { $keys = Get-DefaultModuleKeys }
 
 $selected = @(Resolve-ModuleSelection $keys)
 
