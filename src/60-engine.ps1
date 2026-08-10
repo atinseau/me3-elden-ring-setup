@@ -175,6 +175,8 @@ function Write-ResultSummary {
                 $st = ConvertTo-Hashtable $ModuleState[$m.Key]
                 if ($st.ContainsKey($o.Key)) { $value = $st[$o.Key] }
             }
+            # Une option restee vide n'apprend rien au lecteur : on la tait.
+            if (-not "$value") { continue }
             $line = "   {0,-27} {1}" -f $o.Label, $value
             if ($o.Shared) { $shared.Add($line) } else { $local.Add($line) }
         }

@@ -112,8 +112,32 @@ touchées).
 
 La mise en relation se fait par un mot de passe partagé, sans matchmaking.
 
-*Réglage :* `CoopPassword` (défaut `eldenlan`). Identique chez tous les joueurs :
-c'est lui qui décide qui rejoint quelle partie.
+*Réglages :* `CoopPassword` (défaut `eldenlan`). Identique chez tous les joueurs :
+c'est lui qui décide qui rejoint quelle partie. Et `ErscArchive`, optionnel —
+voir ci-dessous.
+
+#### Si le mod se déclare périmé
+
+Seamless Co-op embarque un contrôle de version : dès qu'une version plus récente
+existe, il refuse de démarrer avec un message du type *« This version of Seamless
+Co-op is out of date »*. Ce n'est pas lié à la version du jeu.
+
+Son seul canal officiel est Nexus Mods, qui publie avant le miroir GitHub et
+**interdit le téléchargement automatisé**. L'installeur ne peut donc pas toujours
+récupérer la dernière version tout seul. Dans ce cas :
+
+1. Télécharge l'archive depuis [la page Nexus](https://www.nexusmods.com/eldenring/mods/510/?tab=files)
+   avec **Manual Download** (un compte gratuit suffit)
+2. Renseigne son chemin dans le champ *Archive .zip* de l'assistant, ou en CLI :
+
+```powershell
+.\me3-elden-ring-setup.ps1 -Mode Repair -NoGui `
+    -Option @{ ErscArchive = 'C:\Users\toi\Downloads\SeamlessCoop.zip' }
+```
+
+L'installeur localise `ersc.dll` dans l'archive quelle que soit son arborescence,
+puis déploie le dossier normalement. Tous les joueurs doivent utiliser la même
+version.
 
 ---
 
