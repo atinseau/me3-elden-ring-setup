@@ -119,12 +119,20 @@ Register-Me3Module @{
             Help    = '"latest" prend la derniere version publiee sur le miroir officiel. Mets un tag precis (par exemple v1.9.0) si ta version du jeu demande une version plus ancienne. Tous les joueurs doivent avoir la meme.'
         }
         @{
-            Key     = 'ErscArchive'
-            Label   = 'Archive .zip (secours)'
+            Key     = 'ErscUrl'
+            Label   = 'URL directe (miroir perso)'
             Type    = 'string'
             Default = ''
             Shared  = $true
-            Help    = 'Chemin d''une archive telechargee a la main depuis Nexus. Utile seulement si le miroir GitHub prend du retard sur Nexus. Laisse vide dans tous les autres cas.'
+            Help    = 'URL d''une archive .zip a telecharger, par exemple ton propre miroir. Utile quand le miroir officiel prend du retard sur Nexus, qui interdit le telechargement automatise. Prioritaire sur le reglage Version.'
+        }
+        @{
+            Key     = 'ErscArchive'
+            Label   = 'Archive .zip locale'
+            Type    = 'string'
+            Default = ''
+            Shared  = $true
+            Help    = 'Chemin d''une archive deja telechargee sur ce PC. Prioritaire sur tout le reste.'
         }
     )
 
@@ -150,11 +158,24 @@ Register-Me3Module @{
         # verifiable, son numero de version nous echappe.
         $allowed = $null
 
+        $url = "$($ctx.Options.ErscUrl)".Trim()
+
         if ($archive) {
             if (-not (Test-Path -LiteralPath $archive)) { Fail "archive Seamless Co-op introuvable : $archive" }
-            Write-Log "archive fournie : $archive"
+            Write-Log "archive locale fournie : $archive"
             $version = "archive locale ($(Split-Path $archive -Leaf))"
             $src = Expand-Download @{ Kind = 'zip'; File = (Split-Path $archive -Leaf) } $archive $m.Key
+        }
+        elseif ($url) {
+            # Miroir personnel : la version n'est pas deductible de l'URL, donc
+            # pas de controle contre la liste blanche. C'est assume, celui qui
+            # heberge sait ce qu'il publie.
+            Write-Log "miroir personnel : $url"
+            $name = [IO.Path]::GetFileName(([uri]$url).LocalPath)
+            if (-not $name -or $name -notmatch '\.zip$') { $name = 'ersc-mirror.zip' }
+            $dl = @{ Url = $url; File = $name; Kind = 'zip'; Sha256 = $null }
+            $version = "miroir ($name)"
+            $src = Expand-Download $dl (Get-Download $dl "$($m.Name) depuis un miroir personnel") $m.Key
         }
         else {
             $policy = Get-ErscVersionPolicy
