@@ -5,3 +5,6 @@ state.json
 
 # l'artefact compile EST le livrable : il reste versionne
 !dist/me3-elden-ring-setup.ps1
+
+# miroir des mods servis a l'installation
+!vendor/*.zip

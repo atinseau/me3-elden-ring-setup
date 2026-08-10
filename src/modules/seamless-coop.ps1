@@ -22,6 +22,34 @@
 
 $script:ErscVersionUrl = 'https://raw.githubusercontent.com/yuiamoroll/EldenRingSeamlessCoopRelease/main/VERSION'
 
+# Miroir de secours servi par ce depot, parce que le miroir officiel n'a pas
+# suivi Nexus et que Nexus interdit le telechargement automatise. Sa version est
+# connue, donc elle reste soumise a la liste blanche comme les autres : le jour
+# ou l'auteur la refusera, l'installeur le detectera au lieu de servir aveugle-
+# ment une archive morte.
+$script:ErscMirrorUrl = 'https://raw.githubusercontent.com/atinseau/me3-elden-ring-setup/main/vendor/SeamlessCoop-v1.9.9.zip'
+$script:ErscMirrorVersion = 'v1.9.9'
+
+function Get-ErscUsableSource {
+    <#
+        Choisit la source a utiliser, dans l'ordre : une release officielle
+        encore autorisee, puis le miroir de ce depot si sa version l'est aussi.
+        Retourne $null quand aucune ne convient.
+    #>
+    param($Policy)
+
+    $m = Get-Me3Module 'seamless-coop'
+    foreach ($r in (Get-GitHubReleaseList -Repo $m.Repo)) {
+        if ((Test-ErscVersionAllowed $Policy $r.tag_name) -ne $false) {
+            return @{ Kind = 'release'; Tag = $r.tag_name }
+        }
+    }
+    if ((Test-ErscVersionAllowed $Policy $script:ErscMirrorVersion) -ne $false) {
+        return @{ Kind = 'mirror'; Tag = $script:ErscMirrorVersion; Url = $script:ErscMirrorUrl }
+    }
+    return $null
+}
+
 function ConvertTo-ErscVersionKey {
     <# 'v1.9.8' -> '1.98', la forme utilisee dans le fichier VERSION. #>
     param([string]$Tag)
@@ -154,10 +182,9 @@ Register-Me3Module @{
         $policy = Get-ErscVersionPolicy
         if (-not $policy) { return $null }
 
-        $m = Get-Me3Module 'seamless-coop'
-        foreach ($r in (Get-GitHubReleaseList -Repo $m.Repo)) {
-            if ((Test-ErscVersionAllowed $policy $r.tag_name) -ne $false) { return $null }
-        }
+        # Une source utilisable existe, miroir de ce depot compris : rien a
+        # demander a l'utilisateur.
+        if (Get-ErscUsableSource $policy) { return $null }
 
         $min = Get-ErscMinimumAllowed $policy
         $seuil = 'plus recente'
@@ -233,27 +260,35 @@ Seamless Co-op ne fonctionnera pas.
 
             if ($wanted -eq 'latest') {
                 # On ne prend pas betement la plus recente : on prend la plus
-                # recente que l'auteur autorise encore.
-                $releases = Get-GitHubReleaseList -Repo $m.Repo
-                $pick = $null
-                foreach ($r in $releases) {
-                    if ((Test-ErscVersionAllowed $policy $r.tag_name) -ne $false) { $pick = $r; break }
+                # recente que l'auteur autorise encore, miroir de ce depot
+                # compris.
+                $source = Get-ErscUsableSource $policy
+
+                if ($source -and $source.Kind -eq 'mirror') {
+                    Write-Log "aucune release officielle autorisee, miroir de ce depot retenu : $($source.Tag)"
+                    $dl = @{ Url = $source.Url; File = "SeamlessCoop-$($source.Tag).zip"; Kind = 'zip'; Sha256 = $null }
+                    $version = $source.Tag
+                    $allowed = Test-ErscVersionAllowed $policy $version
+                    $src = Expand-Download $dl (Get-Download $dl "$($m.Name) $version (miroir)") $m.Key
+                    $useResolved = $false
                 }
-                if ($pick) {
-                    $wanted = $pick.tag_name
+                elseif ($source) {
+                    $wanted = $source.Tag
                     Write-Log "version retenue : $wanted"
+                    $useResolved = $true
                 }
                 else {
-                    $wanted = $releases[0].tag_name
+                    $wanted = (Get-GitHubReleaseList -Repo $m.Repo)[0].tag_name
                     $min = Get-ErscMinimumAllowed $policy
-                    Write-Log 'AUCUNE version du miroir GitHub n''est encore autorisee par l''auteur.' -Level Warn
-                    if ($min) { Write-Log "il faut une version superieure a $min ; la plus recente du miroir est $wanted." -Level Warn }
+                    Write-Log 'AUCUNE source disponible n''est autorisee par l''auteur du mod.' -Level Warn
+                    if ($min) { Write-Log "il faut une version superieure a $min." -Level Warn }
                     Write-Log 'Le mod refusera de demarrer avec le message « out of date ».' -Level Warn
-                    Write-Log 'Recupere l''archive sur https://www.nexusmods.com/eldenring/mods/510?tab=files (Manual Download),' -Level Warn
-                    Write-Log 'puis relance en mode Reparer avec son chemin dans le reglage « Archive .zip ».' -Level Warn
+                    Write-Log 'Recupere l''archive sur https://www.nexusmods.com/eldenring/mods/510?tab=files (Manual Download).' -Level Warn
+                    $useResolved = $true
                 }
             }
             else {
+                $useResolved = $true
                 if ((Test-ErscVersionAllowed $policy $wanted) -eq $false) {
                     Write-Log "la version $wanted est refusee par l'auteur du mod : elle ne demarrera pas." -Level Warn
                     $min = Get-ErscMinimumAllowed $policy
@@ -261,10 +296,12 @@ Seamless Co-op ne fonctionnera pas.
                 }
             }
 
-            $dl = Get-GitHubReleaseAsset -Repo $m.Repo -Tag $wanted
-            $version = $dl.Version
-            $allowed = Test-ErscVersionAllowed $policy $version
-            $src = Expand-Download $dl (Get-Download $dl "$($m.Name) $version") $m.Key
+            if ($useResolved) {
+                $dl = Get-GitHubReleaseAsset -Repo $m.Repo -Tag $wanted
+                $version = $dl.Version
+                $allowed = Test-ErscVersionAllowed $policy $version
+                $src = Expand-Download $dl (Get-Download $dl "$($m.Name) $version") $m.Key
+            }
         }
 
         # L'arborescence varie selon la provenance de l'archive : on localise le
