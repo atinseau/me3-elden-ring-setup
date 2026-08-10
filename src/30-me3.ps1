@@ -40,6 +40,17 @@ function Install-Me3 {
 function Uninstall-Me3 {
     Remove-IfPresent $script:Me3ProgramDir 'me3 (installe par cet installeur)' | Out-Null
     Remove-IfPresent $script:Me3DataDir 'donnees me3 (profils, logs, cache)' | Out-Null
+
+    # Les deux dossiers 'garyttierney' qui contenaient me3 se retrouvent vides.
+    # On ne laisse pas de coquille derriere nous, mais uniquement si le dossier
+    # porte bien ce nom et ne contient plus rien : jamais son parent.
+    foreach ($dir in @((Split-Path $script:Me3ProgramDir -Parent), (Split-Path $script:Me3DataDir -Parent))) {
+        if ((Split-Path $dir -Leaf) -ne 'garyttierney') { continue }
+        if (-not (Test-Path $dir)) { continue }
+        if (Get-ChildItem $dir -Force -ErrorAction SilentlyContinue) { continue }
+        Remove-Item $dir -Force -ErrorAction SilentlyContinue
+        Write-Log "retire : dossier vide $dir" -Level Ok
+    }
 }
 
 function Install-Launcher {
