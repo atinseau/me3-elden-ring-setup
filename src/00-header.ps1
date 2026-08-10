@@ -90,6 +90,24 @@ $script:WorkDir       = Join-Path $env:TEMP 'me3-elden-ring-setup'
 $script:ProfileName   = 'eldenring'
 $script:EldenRingAppId = 1245620
 
+# ---------------------------------------------------------------------------- #
+#  Miroir d'archives
+#
+#  Certains mods ne sont distribues que sur Nexus, qui exige un compte et
+#  interdit le telechargement automatise. Leur archive est alors reservie depuis
+#  une release de ce depot, pour que l'installation ne demande aucune etape
+#  manuelle.
+#
+#  Une release plutot que le depot lui-meme : GitHub refuse tout fichier de plus
+#  de 100 Mo au push, la ou un asset de release monte a 2 Go. Et un binaire
+#  commite reste dans l'historique pour toujours, a la charge de chaque clone.
+#
+#  Le tag est fixe, jamais lie a la version de l'installeur : les URL doivent
+#  rester stables quand l'installeur, lui, evolue.
+# ---------------------------------------------------------------------------- #
+$script:MirrorRepo = 'atinseau/me3-elden-ring-setup'
+$script:MirrorTag  = 'vendor'
+
 # Version de me3 deployee quand il est absent de la machine.
 $script:Me3Version = 'v0.12.1'
 $script:Me3Url     = 'https://github.com/garyttierney/me3/releases/download/v0.12.1/me3-windows-amd64.zip'

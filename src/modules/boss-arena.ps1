@@ -6,9 +6,15 @@
 #  du jeu par son VFS. Rien n'est ecrit dans le dossier du jeu.
 #
 #  L'archive n'est distribuee que sur Nexus, qui exige un compte et interdit le
-#  telechargement automatise : elle est donc demandee a l'utilisateur au moment
-#  utile, via le meme mecanisme de Preflight que Seamless Co-op.
+#  telechargement automatise. Elle est donc resservie depuis les releases de ce
+#  depot : l'installation ne demande aucune etape manuelle. Voir le bloc
+#  « Miroir d'archives » de l'en-tete.
 # ---------------------------------------------------------------------------- #
+
+# La version est dans le nom du fichier : une mise a jour du mod se fait en
+# televersant une nouvelle archive et en changeant cette seule ligne.
+$script:ArenaMirrorVersion = '3.9.5'
+$script:ArenaMirror = New-MirrorDownload -File "BossArenaSandbox-$script:ArenaMirrorVersion.zip"
 
 # Les modificateurs A/B/C de l'auteur sont des regulation.bin exclusifs entre
 # eux. La cle est la valeur du reglage, la valeur le dossier dans l'archive.
@@ -45,7 +51,7 @@ function Get-ArenaModRoot {
 Register-Me3Module @{
     Key     = 'boss-arena'
     Name    = 'Boss Arena (Sandbox Mode)'
-    Version = 'archive Nexus fournie'
+    Version = "Sandbox $script:ArenaMirrorVersion"
     Summary = 'Arene ou tous les boss du jeu et du DLC sont invocables a la demande, avec stats et recompenses reequilibrees.'
     Url     = 'https://www.nexusmods.com/eldenring/mods/5645'
 
@@ -74,8 +80,17 @@ Register-Me3Module @{
             Shared  = $true
             Help    = '0 = non, 1 = oui. Corrige les combats de Gideon et Rykard quand un randomiseur d''ennemis est utilise. A appliquer AVANT de lancer la randomisation.'
         }
-        # Plomberie : Nexus interdit le telechargement automatise. L'assistant
-        # n'affiche pas ce reglage, il reclame le fichier au moment utile.
+        # Les deux reglages suivants sont de la plomberie : ils permettent de
+        # court-circuiter le miroir. L'assistant ne les affiche pas.
+        @{
+            Key      = 'ArenaUrl'
+            Label    = 'URL directe (miroir)'
+            Type     = 'string'
+            Default  = ''
+            Shared   = $true
+            Advanced = $true
+            Help     = 'URL d''une archive .zip a telecharger, par exemple ton propre miroir. Prioritaire sur le miroir de ce depot.'
+        }
         @{
             Key      = 'ArenaArchive'
             Label    = 'Archive .zip locale'
@@ -83,59 +98,21 @@ Register-Me3Module @{
             Default  = ''
             Shared   = $false
             Advanced = $true
-            Help     = 'Chemin de l''archive Boss Arena telechargee sur CE PC. Le chemin est propre a chaque machine, mais la VERSION du mod doit etre la meme chez tous les joueurs.'
+            Help     = 'Chemin d''une archive deja telechargee sur CE PC. Prioritaire sur tout le reste.'
         }
     )
 
-    # Aucun telechargement automatique possible : voir Preflight.
     Downloads = @{}
 
-    Preflight = {
-        param($options)
-
-        # Deja renseigne, et le fichier est toujours la : rien a demander.
-        $archive = "$($options.ArenaArchive)".Trim()
-        if ($archive -and (Test-Path -LiteralPath $archive)) { return $null }
-
-        $relance = ''
-        if ($archive) { $relance = "`r`nL'archive indiquee precedemment est introuvable :`r`n  $archive`r`n" }
-
-        return @{
-            Title     = 'Boss Arena : telechargement manuel'
-            Message   = @"
-Boss Arena n'est publie que sur Nexus Mods, qui exige un compte et interdit le
-telechargement automatise. C'est la seule etape que l'installeur ne peut pas
-faire a ta place.
-$relance
-  1. Ouvre la page ci-dessous, onglet FILES
-  2. Bouton MANUAL DOWNLOAD sur la version « Sandbox »
-  3. Indique ici le fichier .zip telecharge
-
-En co-op, tous les joueurs doivent installer LA MEME version du mod, et le meme
-equilibrage : le regulation.bin decide des stats des boss.
-
-Tu peux aussi continuer sans : les autres mods s'installeront normalement, et
-Boss Arena sera simplement absent.
-"@
-            LinkUrl   = 'https://www.nexusmods.com/eldenring/mods/5645?tab=files'
-            LinkLabel = 'Ouvrir la page Nexus'
-            OptionKey = 'ArenaArchive'
-            Filter    = 'Archive Boss Arena|*.zip|Tous les fichiers|*.*'
-        }
-    }
+    # Rien a demander : l'archive est servie par le miroir de ce depot.
+    Preflight = { param($options) return $null }
 
     Install = {
         param($ctx)
 
         $m = Get-Me3Module 'boss-arena'
 
-        $archive = "$($ctx.Options.ArenaArchive)".Trim()
-        if (-not $archive) {
-            Fail "Boss Arena : aucune archive indiquee. Recupere-la sur $($m.Url) (Manual Download), puis renseigne le reglage « Archive .zip locale »."
-        }
-        if (-not (Test-Path -LiteralPath $archive)) { Fail "archive Boss Arena introuvable : $archive" }
-
-        # Reglages valides avant d'extraire 100 Mo pour rien.
+        # Reglages valides avant de telecharger ou d'extraire 100 Mo pour rien.
         $tuning = "$($ctx.Options.ArenaTuning)".Trim().ToLower()
         if (-not $tuning) { $tuning = 'defaut' }
         if (-not $script:ArenaTuningDirs.Contains($tuning)) {
@@ -143,8 +120,30 @@ Boss Arena sera simplement absent.
         }
         $fix = [int]$ctx.Options.ArenaRandomizerFix
 
-        Write-Log "archive locale fournie : $archive"
-        $src = Expand-Download @{ Kind = 'zip'; File = (Split-Path $archive -Leaf) } $archive $m.Key
+        # Trois sources, par priorite decroissante : archive locale, miroir
+        # personnel, miroir de ce depot.
+        $archive = "$($ctx.Options.ArenaArchive)".Trim()
+        $url = "$($ctx.Options.ArenaUrl)".Trim()
+
+        if ($archive) {
+            if (-not (Test-Path -LiteralPath $archive)) { Fail "archive Boss Arena introuvable : $archive" }
+            Write-Log "archive locale fournie : $archive"
+            $version = "archive locale ($(Split-Path $archive -Leaf))"
+            $src = Expand-Download @{ Kind = 'zip'; File = (Split-Path $archive -Leaf) } $archive $m.Key
+        }
+        elseif ($url) {
+            Write-Log "miroir personnel : $url"
+            $name = [IO.Path]::GetFileName(([uri]$url).LocalPath)
+            if (-not $name -or $name -notmatch '\.zip$') { $name = 'boss-arena-mirror.zip' }
+            $dl = @{ Url = $url; File = $name; Kind = 'zip'; Sha256 = $null }
+            $version = "miroir ($name)"
+            $src = Expand-Download $dl (Get-Download $dl "$($m.Name) depuis un miroir personnel") $m.Key
+        }
+        else {
+            $dl = $script:ArenaMirror
+            $version = "Sandbox $script:ArenaMirrorVersion"
+            $src = Expand-Download $dl (Get-Download $dl "$($m.Name) $version") $m.Key
+        }
 
         $modDir = Get-ArenaModRoot $src
         # « Optional modifiers » est a cote du dossier 'mod', pas dedans.
@@ -189,8 +188,7 @@ Boss Arena sera simplement absent.
         }
 
         $mo = [math]::Round((Get-ChildItem $dst -Recurse -File | Measure-Object Length -Sum).Sum / 1MB, 1)
-        $version = "archive locale ($(Split-Path $archive -Leaf))"
-        Write-Log "$($m.Name) installe : $mo Mo deployes" -Level Ok
+        Write-Log "$($m.Name) $version installe : $mo Mo deployes" -Level Ok
 
         return @{
             Dir           = $root

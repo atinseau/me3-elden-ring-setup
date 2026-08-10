@@ -101,6 +101,24 @@ $script:WorkDir       = Join-Path $env:TEMP 'me3-elden-ring-setup'
 $script:ProfileName   = 'eldenring'
 $script:EldenRingAppId = 1245620
 
+# ---------------------------------------------------------------------------- #
+#  Miroir d'archives
+#
+#  Certains mods ne sont distribues que sur Nexus, qui exige un compte et
+#  interdit le telechargement automatise. Leur archive est alors reservie depuis
+#  une release de ce depot, pour que l'installation ne demande aucune etape
+#  manuelle.
+#
+#  Une release plutot que le depot lui-meme : GitHub refuse tout fichier de plus
+#  de 100 Mo au push, la ou un asset de release monte a 2 Go. Et un binaire
+#  commite reste dans l'historique pour toujours, a la charge de chaque clone.
+#
+#  Le tag est fixe, jamais lie a la version de l'installeur : les URL doivent
+#  rester stables quand l'installeur, lui, evolue.
+# ---------------------------------------------------------------------------- #
+$script:MirrorRepo = 'atinseau/me3-elden-ring-setup'
+$script:MirrorTag  = 'vendor'
+
 # Version de me3 deployee quand il est absent de la machine.
 $script:Me3Version = 'v0.12.1'
 $script:Me3Url     = 'https://github.com/garyttierney/me3/releases/download/v0.12.1/me3-windows-amd64.zip'
@@ -225,6 +243,27 @@ function Remove-IfPresent {
 # ---------------------------------------------------------------------------- #
 #  Telechargement et extraction
 # ---------------------------------------------------------------------------- #
+
+function New-MirrorDownload {
+    <#
+        Descripteur de telechargement pour une archive resservie depuis les
+        releases de ce depot. Voir le bloc « Miroir d'archives » de l'en-tete.
+
+        Un module qui a besoin d'un miroir passe par ici plutot que d'ecrire une
+        URL en dur : le jour ou l'hebergement change, un seul endroit bouge.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$File,
+        [ValidateSet('zip', '7z')][string]$Kind = 'zip',
+        [string]$Sha256
+    )
+    return @{
+        Url    = "https://github.com/$script:MirrorRepo/releases/download/$script:MirrorTag/$File"
+        File   = $File
+        Kind   = $Kind
+        Sha256 = $Sha256
+    }
+}
 
 function Get-Download {
     <#
@@ -878,9 +917,15 @@ function New-ModuleContext {
 #  du jeu par son VFS. Rien n'est ecrit dans le dossier du jeu.
 #
 #  L'archive n'est distribuee que sur Nexus, qui exige un compte et interdit le
-#  telechargement automatise : elle est donc demandee a l'utilisateur au moment
-#  utile, via le meme mecanisme de Preflight que Seamless Co-op.
+#  telechargement automatise. Elle est donc resservie depuis les releases de ce
+#  depot : l'installation ne demande aucune etape manuelle. Voir le bloc
+#  « Miroir d'archives » de l'en-tete.
 # ---------------------------------------------------------------------------- #
+
+# La version est dans le nom du fichier : une mise a jour du mod se fait en
+# televersant une nouvelle archive et en changeant cette seule ligne.
+$script:ArenaMirrorVersion = '3.9.5'
+$script:ArenaMirror = New-MirrorDownload -File "BossArenaSandbox-$script:ArenaMirrorVersion.zip"
 
 # Les modificateurs A/B/C de l'auteur sont des regulation.bin exclusifs entre
 # eux. La cle est la valeur du reglage, la valeur le dossier dans l'archive.
@@ -917,7 +962,7 @@ function Get-ArenaModRoot {
 Register-Me3Module @{
     Key     = 'boss-arena'
     Name    = 'Boss Arena (Sandbox Mode)'
-    Version = 'archive Nexus fournie'
+    Version = "Sandbox $script:ArenaMirrorVersion"
     Summary = 'Arene ou tous les boss du jeu et du DLC sont invocables a la demande, avec stats et recompenses reequilibrees.'
     Url     = 'https://www.nexusmods.com/eldenring/mods/5645'
 
@@ -946,8 +991,17 @@ Register-Me3Module @{
             Shared  = $true
             Help    = '0 = non, 1 = oui. Corrige les combats de Gideon et Rykard quand un randomiseur d''ennemis est utilise. A appliquer AVANT de lancer la randomisation.'
         }
-        # Plomberie : Nexus interdit le telechargement automatise. L'assistant
-        # n'affiche pas ce reglage, il reclame le fichier au moment utile.
+        # Les deux reglages suivants sont de la plomberie : ils permettent de
+        # court-circuiter le miroir. L'assistant ne les affiche pas.
+        @{
+            Key      = 'ArenaUrl'
+            Label    = 'URL directe (miroir)'
+            Type     = 'string'
+            Default  = ''
+            Shared   = $true
+            Advanced = $true
+            Help     = 'URL d''une archive .zip a telecharger, par exemple ton propre miroir. Prioritaire sur le miroir de ce depot.'
+        }
         @{
             Key      = 'ArenaArchive'
             Label    = 'Archive .zip locale'
@@ -955,59 +1009,21 @@ Register-Me3Module @{
             Default  = ''
             Shared   = $false
             Advanced = $true
-            Help     = 'Chemin de l''archive Boss Arena telechargee sur CE PC. Le chemin est propre a chaque machine, mais la VERSION du mod doit etre la meme chez tous les joueurs.'
+            Help     = 'Chemin d''une archive deja telechargee sur CE PC. Prioritaire sur tout le reste.'
         }
     )
 
-    # Aucun telechargement automatique possible : voir Preflight.
     Downloads = @{}
 
-    Preflight = {
-        param($options)
-
-        # Deja renseigne, et le fichier est toujours la : rien a demander.
-        $archive = "$($options.ArenaArchive)".Trim()
-        if ($archive -and (Test-Path -LiteralPath $archive)) { return $null }
-
-        $relance = ''
-        if ($archive) { $relance = "`r`nL'archive indiquee precedemment est introuvable :`r`n  $archive`r`n" }
-
-        return @{
-            Title     = 'Boss Arena : telechargement manuel'
-            Message   = @"
-Boss Arena n'est publie que sur Nexus Mods, qui exige un compte et interdit le
-telechargement automatise. C'est la seule etape que l'installeur ne peut pas
-faire a ta place.
-$relance
-  1. Ouvre la page ci-dessous, onglet FILES
-  2. Bouton MANUAL DOWNLOAD sur la version « Sandbox »
-  3. Indique ici le fichier .zip telecharge
-
-En co-op, tous les joueurs doivent installer LA MEME version du mod, et le meme
-equilibrage : le regulation.bin decide des stats des boss.
-
-Tu peux aussi continuer sans : les autres mods s'installeront normalement, et
-Boss Arena sera simplement absent.
-"@
-            LinkUrl   = 'https://www.nexusmods.com/eldenring/mods/5645?tab=files'
-            LinkLabel = 'Ouvrir la page Nexus'
-            OptionKey = 'ArenaArchive'
-            Filter    = 'Archive Boss Arena|*.zip|Tous les fichiers|*.*'
-        }
-    }
+    # Rien a demander : l'archive est servie par le miroir de ce depot.
+    Preflight = { param($options) return $null }
 
     Install = {
         param($ctx)
 
         $m = Get-Me3Module 'boss-arena'
 
-        $archive = "$($ctx.Options.ArenaArchive)".Trim()
-        if (-not $archive) {
-            Fail "Boss Arena : aucune archive indiquee. Recupere-la sur $($m.Url) (Manual Download), puis renseigne le reglage « Archive .zip locale »."
-        }
-        if (-not (Test-Path -LiteralPath $archive)) { Fail "archive Boss Arena introuvable : $archive" }
-
-        # Reglages valides avant d'extraire 100 Mo pour rien.
+        # Reglages valides avant de telecharger ou d'extraire 100 Mo pour rien.
         $tuning = "$($ctx.Options.ArenaTuning)".Trim().ToLower()
         if (-not $tuning) { $tuning = 'defaut' }
         if (-not $script:ArenaTuningDirs.Contains($tuning)) {
@@ -1015,8 +1031,30 @@ Boss Arena sera simplement absent.
         }
         $fix = [int]$ctx.Options.ArenaRandomizerFix
 
-        Write-Log "archive locale fournie : $archive"
-        $src = Expand-Download @{ Kind = 'zip'; File = (Split-Path $archive -Leaf) } $archive $m.Key
+        # Trois sources, par priorite decroissante : archive locale, miroir
+        # personnel, miroir de ce depot.
+        $archive = "$($ctx.Options.ArenaArchive)".Trim()
+        $url = "$($ctx.Options.ArenaUrl)".Trim()
+
+        if ($archive) {
+            if (-not (Test-Path -LiteralPath $archive)) { Fail "archive Boss Arena introuvable : $archive" }
+            Write-Log "archive locale fournie : $archive"
+            $version = "archive locale ($(Split-Path $archive -Leaf))"
+            $src = Expand-Download @{ Kind = 'zip'; File = (Split-Path $archive -Leaf) } $archive $m.Key
+        }
+        elseif ($url) {
+            Write-Log "miroir personnel : $url"
+            $name = [IO.Path]::GetFileName(([uri]$url).LocalPath)
+            if (-not $name -or $name -notmatch '\.zip$') { $name = 'boss-arena-mirror.zip' }
+            $dl = @{ Url = $url; File = $name; Kind = 'zip'; Sha256 = $null }
+            $version = "miroir ($name)"
+            $src = Expand-Download $dl (Get-Download $dl "$($m.Name) depuis un miroir personnel") $m.Key
+        }
+        else {
+            $dl = $script:ArenaMirror
+            $version = "Sandbox $script:ArenaMirrorVersion"
+            $src = Expand-Download $dl (Get-Download $dl "$($m.Name) $version") $m.Key
+        }
 
         $modDir = Get-ArenaModRoot $src
         # « Optional modifiers » est a cote du dossier 'mod', pas dedans.
@@ -1061,8 +1099,7 @@ Boss Arena sera simplement absent.
         }
 
         $mo = [math]::Round((Get-ChildItem $dst -Recurse -File | Measure-Object Length -Sum).Sum / 1MB, 1)
-        $version = "archive locale ($(Split-Path $archive -Leaf))"
-        Write-Log "$($m.Name) installe : $mo Mo deployes" -Level Ok
+        Write-Log "$($m.Name) $version installe : $mo Mo deployes" -Level Ok
 
         return @{
             Dir           = $root
@@ -1438,8 +1475,8 @@ $script:ErscVersionUrl = 'https://raw.githubusercontent.com/yuiamoroll/EldenRing
 # connue, donc elle reste soumise a la liste blanche comme les autres : le jour
 # ou l'auteur la refusera, l'installeur le detectera au lieu de servir aveugle-
 # ment une archive morte.
-$script:ErscMirrorUrl = 'https://raw.githubusercontent.com/atinseau/me3-elden-ring-setup/main/vendor/SeamlessCoop-v1.9.9.zip'
 $script:ErscMirrorVersion = 'v1.9.9'
+$script:ErscMirror = New-MirrorDownload -File "SeamlessCoop-$script:ErscMirrorVersion.zip"
 
 function Get-ErscUsableSource {
     <#
@@ -1456,7 +1493,7 @@ function Get-ErscUsableSource {
         }
     }
     if ((Test-ErscVersionAllowed $Policy $script:ErscMirrorVersion) -ne $false) {
-        return @{ Kind = 'mirror'; Tag = $script:ErscMirrorVersion; Url = $script:ErscMirrorUrl }
+        return @{ Kind = 'mirror'; Tag = $script:ErscMirrorVersion; Download = $script:ErscMirror }
     }
     return $null
 }
@@ -1685,7 +1722,7 @@ Seamless Co-op ne fonctionnera pas.
 
                 if ($source -and $source.Kind -eq 'mirror') {
                     Write-Log "aucune release officielle autorisee, miroir de ce depot retenu : $($source.Tag)"
-                    $dl = @{ Url = $source.Url; File = "SeamlessCoop-$($source.Tag).zip"; Kind = 'zip'; Sha256 = $null }
+                    $dl = $source.Download
                     $version = $source.Tag
                     $allowed = Test-ErscVersionAllowed $policy $version
                     $src = Expand-Download $dl (Get-Download $dl "$($m.Name) $version (miroir)") $m.Key

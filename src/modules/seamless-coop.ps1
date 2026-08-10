@@ -27,8 +27,8 @@ $script:ErscVersionUrl = 'https://raw.githubusercontent.com/yuiamoroll/EldenRing
 # connue, donc elle reste soumise a la liste blanche comme les autres : le jour
 # ou l'auteur la refusera, l'installeur le detectera au lieu de servir aveugle-
 # ment une archive morte.
-$script:ErscMirrorUrl = 'https://raw.githubusercontent.com/atinseau/me3-elden-ring-setup/main/vendor/SeamlessCoop-v1.9.9.zip'
 $script:ErscMirrorVersion = 'v1.9.9'
+$script:ErscMirror = New-MirrorDownload -File "SeamlessCoop-$script:ErscMirrorVersion.zip"
 
 function Get-ErscUsableSource {
     <#
@@ -45,7 +45,7 @@ function Get-ErscUsableSource {
         }
     }
     if ((Test-ErscVersionAllowed $Policy $script:ErscMirrorVersion) -ne $false) {
-        return @{ Kind = 'mirror'; Tag = $script:ErscMirrorVersion; Url = $script:ErscMirrorUrl }
+        return @{ Kind = 'mirror'; Tag = $script:ErscMirrorVersion; Download = $script:ErscMirror }
     }
     return $null
 }
@@ -274,7 +274,7 @@ Seamless Co-op ne fonctionnera pas.
 
                 if ($source -and $source.Kind -eq 'mirror') {
                     Write-Log "aucune release officielle autorisee, miroir de ce depot retenu : $($source.Tag)"
-                    $dl = @{ Url = $source.Url; File = "SeamlessCoop-$($source.Tag).zip"; Kind = 'zip'; Sha256 = $null }
+                    $dl = $source.Download
                     $version = $source.Tag
                     $allowed = Test-ErscVersionAllowed $policy $version
                     $src = Expand-Download $dl (Get-Download $dl "$($m.Name) $version (miroir)") $m.Key

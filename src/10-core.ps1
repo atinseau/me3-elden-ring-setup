@@ -113,6 +113,27 @@ function Remove-IfPresent {
 #  Telechargement et extraction
 # ---------------------------------------------------------------------------- #
 
+function New-MirrorDownload {
+    <#
+        Descripteur de telechargement pour une archive resservie depuis les
+        releases de ce depot. Voir le bloc « Miroir d'archives » de l'en-tete.
+
+        Un module qui a besoin d'un miroir passe par ici plutot que d'ecrire une
+        URL en dur : le jour ou l'hebergement change, un seul endroit bouge.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$File,
+        [ValidateSet('zip', '7z')][string]$Kind = 'zip',
+        [string]$Sha256
+    )
+    return @{
+        Url    = "https://github.com/$script:MirrorRepo/releases/download/$script:MirrorTag/$File"
+        File   = $File
+        Kind   = $Kind
+        Sha256 = $Sha256
+    }
+}
+
 function Get-Download {
     <#
         $Download = @{ Url; File; Kind = 'zip'|'7z'; Sha256 = $null|'...' }
