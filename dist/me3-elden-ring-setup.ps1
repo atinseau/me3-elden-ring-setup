@@ -293,6 +293,65 @@ function Expand-Download {
     return $out
 }
 
+# ---------------------------------------------------------------------------- #
+#  Elevation ponctuelle
+#
+#  L'installeur s'execute sans droits administrateur. Certaines etapes en ont
+#  pourtant besoin (les regles de pare-feu). Plutot que d'exiger une elevation
+#  pour tout le script, on n'eleve que le fragment concerne, et seulement quand
+#  c'est reellement necessaire.
+# ---------------------------------------------------------------------------- #
+
+function Test-IsAdmin {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    return ([Security.Principal.WindowsPrincipal]$id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Invoke-Elevated {
+    <#
+        Execute un fragment PowerShell avec les droits administrateur.
+        Deja administrateur : execute sur place, sans invite UAC.
+        Sinon : relance un PowerShell eleve. Un refus de l'invite UAC n'est pas
+        une erreur fatale, l'appelant decide quoi en faire.
+
+        Retourne $true si le fragment s'est execute et a rendu 0.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Script,
+        [Parameter(Mandatory)][string]$Purpose
+    )
+
+    if (Test-IsAdmin) {
+        try {
+            & ([scriptblock]::Create($Script))
+            return $true
+        }
+        catch {
+            Write-Log "$Purpose : $($_.Exception.Message)" -Level Warn
+            return $false
+        }
+    }
+
+    Write-Log "elevation demandee pour : $Purpose"
+    Write-Log 'accepte l''invite Windows qui vient d''apparaitre.'
+
+    # EncodedCommand : le fragment traverse la frontiere de processus sans etre
+    # deforme par les regles de quoting de la ligne de commande.
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Script))
+    try {
+        $p = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden `
+            -ArgumentList "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $b64"
+        if ($p.ExitCode -eq 0) { return $true }
+        Write-Log "$Purpose : le processus eleve a retourne $($p.ExitCode)" -Level Warn
+        return $false
+    }
+    catch {
+        # Cas courant : l'utilisateur a refuse l'invite UAC.
+        Write-Log "$Purpose : elevation refusee ou impossible" -Level Warn
+        return $false
+    }
+}
+
 # Execute un exe natif en capturant sa sortie sans utiliser de redirection.
 # En Windows PowerShell 5.1, "2>$null" sur un exe natif emballe chaque ligne de
 # stderr dans un ErrorRecord (NativeCommandError) et fait echouer l'appel, alors
@@ -722,6 +781,89 @@ function New-ModuleContext {
 #  Aucun package ne peut donc servir cette DLL.
 # ---------------------------------------------------------------------------- #
 
+# Regles de pare-feu : gbe_fork ecoute A L'INTERIEUR du processus eldenring.exe.
+# Windows bloque par defaut les connexions entrantes vers un programme inconnu,
+# et l'echec est SILENCIEUX : les autres joueurs ne te trouvent jamais, sans
+# aucun message en jeu. On pose donc les regles nous-memes.
+$script:GbeFirewallGroup = 'me3-elden-ring-setup'
+
+function Test-GbeFirewallRule {
+    <# Les regles existent-elles deja, sur le bon programme et le bon port ? #>
+    param([string]$Exe, [int]$Port)
+
+    $rules = @(Get-NetFirewallRule -Group $script:GbeFirewallGroup -ErrorAction SilentlyContinue)
+    if ($rules.Count -lt 2) { return $false }
+
+    foreach ($r in $rules) {
+        try {
+            if ("$($r.Enabled)" -ne 'True') { return $false }
+            $app = $r | Get-NetFirewallApplicationFilter -ErrorAction Stop
+            if ("$($app.Program)" -ne $Exe) { return $false }
+            $prt = $r | Get-NetFirewallPortFilter -ErrorAction Stop
+            if ("$($prt.LocalPort)" -ne "$Port") { return $false }
+        }
+        catch { return $false }
+    }
+    return $true
+}
+
+function Set-GbeFirewallRule {
+    param([string]$Exe, [int]$Port)
+
+    if (Test-GbeFirewallRule -Exe $Exe -Port $Port) {
+        Write-Log 'regles de pare-feu deja en place' -Level Ok
+        return $true
+    }
+
+    # Les apostrophes sont doublees : un chemin peut en contenir.
+    $e = $Exe.Replace("'", "''")
+    $g = $script:GbeFirewallGroup
+    $body = @"
+`$ErrorActionPreference = 'Stop'
+try {
+    Get-NetFirewallRule -Group '$g' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    New-NetFirewallRule -DisplayName 'ELDEN RING (me3 LAN) - UDP' -Group '$g' -Direction Inbound ``
+        -Program '$e' -Protocol UDP -LocalPort $Port -Action Allow -Profile Private,Domain | Out-Null
+    New-NetFirewallRule -DisplayName 'ELDEN RING (me3 LAN) - TCP' -Group '$g' -Direction Inbound ``
+        -Program '$e' -Protocol TCP -LocalPort $Port -Action Allow -Profile Private,Domain | Out-Null
+    exit 0
+} catch { exit 1 }
+"@
+
+    $ok = Invoke-Elevated -Script $body -Purpose "creation des regles de pare-feu (UDP et TCP $Port)"
+
+    if ($ok -and (Test-GbeFirewallRule -Exe $Exe -Port $Port)) {
+        Write-Log "pare-feu : eldenring.exe autorise en entrant, UDP et TCP $Port (profils prive et domaine)" -Level Ok
+        return $true
+    }
+
+    # Un refus n'annule pas l'installation : le jeu marchera, mais personne ne
+    # te trouvera tant que les regles n'existent pas.
+    Write-Log 'regles de pare-feu NON creees.' -Level Warn
+    Write-Log 'Sans elles, les autres joueurs ne te trouveront pas, et le jeu ne signalera rien.' -Level Warn
+    Write-Log 'Soit tu acceptes la boite « Autoriser l''acces » au premier lancement (coche Reseaux prives),' -Level Warn
+    Write-Log 'soit tu relances l''installeur en mode Reparer pour reessayer.' -Level Warn
+    return $false
+}
+
+function Remove-GbeFirewallRule {
+    if (-not (Get-NetFirewallRule -Group $script:GbeFirewallGroup -ErrorAction SilentlyContinue)) {
+        return
+    }
+    $g = $script:GbeFirewallGroup
+    $body = @"
+`$ErrorActionPreference = 'SilentlyContinue'
+Get-NetFirewallRule -Group '$g' | Remove-NetFirewallRule
+exit 0
+"@
+    if (Invoke-Elevated -Script $body -Purpose 'suppression des regles de pare-feu') {
+        Write-Log 'retire : regles de pare-feu' -Level Ok
+    }
+    else {
+        Write-Log "les regles de pare-feu du groupe '$g' subsistent, a retirer a la main si besoin" -Level Warn
+    }
+}
+
 Register-Me3Module @{
     Key     = 'gbe-fork'
     Name    = 'gbe_fork (emulateur Steam LAN)'
@@ -889,12 +1031,18 @@ ip_country=FR
 "@
         }
 
+        # Pare-feu : seule etape necessitant une elevation, et uniquement si les
+        # regles ne sont pas deja correctes. Une reparation ne redemande donc
+        # rien tant que le port et le chemin du jeu n'ont pas change.
+        $fw = Set-GbeFirewallRule -Exe $ctx.GameExe -Port $port
+
         return @{
             BackupPath   = $(if ($backedUp) { $backup } else { $null })
             OriginalHash = $originalHash
             SteamId      = $id
             PlayerName   = $name
             Port         = $port
+            FirewallOk   = [bool]$fw
         }
     }
 
@@ -925,6 +1073,8 @@ ip_country=FR
 
         Remove-IfPresent (Join-Path $ctx.GamePath 'steam_settings') 'steam_settings\' | Out-Null
         Remove-IfPresent (Join-Path $ctx.GamePath 'steam_appid.txt') 'steam_appid.txt' | Out-Null
+
+        Remove-GbeFirewallRule
     }
 }
 #endregion
@@ -1319,9 +1469,15 @@ function Write-ResultSummary {
         Write-Log 'A GARDER DIFFERENT chez chacun :'
         foreach ($l in $local) { Write-Log $l }
     }
-    if ($ModuleList | Where-Object { $_.SkipSteamInit }) {
-        Write-Log ''
-        Write-Log 'Pense a autoriser eldenring.exe dans le pare-feu, en UDP et en TCP.'
+    # Les regles de pare-feu sont posees automatiquement. On ne rappelle donc
+    # le sujet que si un module signale qu'il n'a pas pu les creer.
+    foreach ($key in $ModuleState.Keys) {
+        $st = ConvertTo-Hashtable $ModuleState[$key]
+        if ($st.ContainsKey('FirewallOk') -and -not $st['FirewallOk']) {
+            Write-Log ''
+            Write-Log 'ATTENTION : les regles de pare-feu n''ont pas pu etre creees.'
+            Write-Log 'Relance en mode Reparer et accepte l''invite, sinon personne ne te trouvera.'
+        }
     }
     Write-Log ''
     Write-Log "Lance la partie avec le raccourci 'Elden Ring (me3)' sur le bureau."
@@ -1686,7 +1842,7 @@ function Show-SetupWizard {
 
     function Show-PageOptions {
         $lblTitle.Text = 'Reglages'
-        $lblSub.Text = 'Les reglages marques Â« identique Â» doivent correspondre chez tous les joueurs.'
+        $lblSub.Text = 'Les reglages marques « identique » doivent correspondre chez tous les joueurs.'
 
         $panel = New-Object System.Windows.Forms.Panel
         $panel.Location = New-Object System.Drawing.Point(0, 0)

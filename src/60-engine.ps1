@@ -189,9 +189,15 @@ function Write-ResultSummary {
         Write-Log 'A GARDER DIFFERENT chez chacun :'
         foreach ($l in $local) { Write-Log $l }
     }
-    if ($ModuleList | Where-Object { $_.SkipSteamInit }) {
-        Write-Log ''
-        Write-Log 'Pense a autoriser eldenring.exe dans le pare-feu, en UDP et en TCP.'
+    # Les regles de pare-feu sont posees automatiquement. On ne rappelle donc
+    # le sujet que si un module signale qu'il n'a pas pu les creer.
+    foreach ($key in $ModuleState.Keys) {
+        $st = ConvertTo-Hashtable $ModuleState[$key]
+        if ($st.ContainsKey('FirewallOk') -and -not $st['FirewallOk']) {
+            Write-Log ''
+            Write-Log 'ATTENTION : les regles de pare-feu n''ont pas pu etre creees.'
+            Write-Log 'Relance en mode Reparer et accepte l''invite, sinon personne ne te trouvera.'
+        }
     }
     Write-Log ''
     Write-Log "Lance la partie avec le raccourci 'Elden Ring (me3)' sur le bureau."

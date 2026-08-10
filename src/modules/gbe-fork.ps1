@@ -9,6 +9,89 @@
 #  Aucun package ne peut donc servir cette DLL.
 # ---------------------------------------------------------------------------- #
 
+# Regles de pare-feu : gbe_fork ecoute A L'INTERIEUR du processus eldenring.exe.
+# Windows bloque par defaut les connexions entrantes vers un programme inconnu,
+# et l'echec est SILENCIEUX : les autres joueurs ne te trouvent jamais, sans
+# aucun message en jeu. On pose donc les regles nous-memes.
+$script:GbeFirewallGroup = 'me3-elden-ring-setup'
+
+function Test-GbeFirewallRule {
+    <# Les regles existent-elles deja, sur le bon programme et le bon port ? #>
+    param([string]$Exe, [int]$Port)
+
+    $rules = @(Get-NetFirewallRule -Group $script:GbeFirewallGroup -ErrorAction SilentlyContinue)
+    if ($rules.Count -lt 2) { return $false }
+
+    foreach ($r in $rules) {
+        try {
+            if ("$($r.Enabled)" -ne 'True') { return $false }
+            $app = $r | Get-NetFirewallApplicationFilter -ErrorAction Stop
+            if ("$($app.Program)" -ne $Exe) { return $false }
+            $prt = $r | Get-NetFirewallPortFilter -ErrorAction Stop
+            if ("$($prt.LocalPort)" -ne "$Port") { return $false }
+        }
+        catch { return $false }
+    }
+    return $true
+}
+
+function Set-GbeFirewallRule {
+    param([string]$Exe, [int]$Port)
+
+    if (Test-GbeFirewallRule -Exe $Exe -Port $Port) {
+        Write-Log 'regles de pare-feu deja en place' -Level Ok
+        return $true
+    }
+
+    # Les apostrophes sont doublees : un chemin peut en contenir.
+    $e = $Exe.Replace("'", "''")
+    $g = $script:GbeFirewallGroup
+    $body = @"
+`$ErrorActionPreference = 'Stop'
+try {
+    Get-NetFirewallRule -Group '$g' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    New-NetFirewallRule -DisplayName 'ELDEN RING (me3 LAN) - UDP' -Group '$g' -Direction Inbound ``
+        -Program '$e' -Protocol UDP -LocalPort $Port -Action Allow -Profile Private,Domain | Out-Null
+    New-NetFirewallRule -DisplayName 'ELDEN RING (me3 LAN) - TCP' -Group '$g' -Direction Inbound ``
+        -Program '$e' -Protocol TCP -LocalPort $Port -Action Allow -Profile Private,Domain | Out-Null
+    exit 0
+} catch { exit 1 }
+"@
+
+    $ok = Invoke-Elevated -Script $body -Purpose "creation des regles de pare-feu (UDP et TCP $Port)"
+
+    if ($ok -and (Test-GbeFirewallRule -Exe $Exe -Port $Port)) {
+        Write-Log "pare-feu : eldenring.exe autorise en entrant, UDP et TCP $Port (profils prive et domaine)" -Level Ok
+        return $true
+    }
+
+    # Un refus n'annule pas l'installation : le jeu marchera, mais personne ne
+    # te trouvera tant que les regles n'existent pas.
+    Write-Log 'regles de pare-feu NON creees.' -Level Warn
+    Write-Log 'Sans elles, les autres joueurs ne te trouveront pas, et le jeu ne signalera rien.' -Level Warn
+    Write-Log 'Soit tu acceptes la boite « Autoriser l''acces » au premier lancement (coche Reseaux prives),' -Level Warn
+    Write-Log 'soit tu relances l''installeur en mode Reparer pour reessayer.' -Level Warn
+    return $false
+}
+
+function Remove-GbeFirewallRule {
+    if (-not (Get-NetFirewallRule -Group $script:GbeFirewallGroup -ErrorAction SilentlyContinue)) {
+        return
+    }
+    $g = $script:GbeFirewallGroup
+    $body = @"
+`$ErrorActionPreference = 'SilentlyContinue'
+Get-NetFirewallRule -Group '$g' | Remove-NetFirewallRule
+exit 0
+"@
+    if (Invoke-Elevated -Script $body -Purpose 'suppression des regles de pare-feu') {
+        Write-Log 'retire : regles de pare-feu' -Level Ok
+    }
+    else {
+        Write-Log "les regles de pare-feu du groupe '$g' subsistent, a retirer a la main si besoin" -Level Warn
+    }
+}
+
 Register-Me3Module @{
     Key     = 'gbe-fork'
     Name    = 'gbe_fork (emulateur Steam LAN)'
@@ -176,12 +259,18 @@ ip_country=FR
 "@
         }
 
+        # Pare-feu : seule etape necessitant une elevation, et uniquement si les
+        # regles ne sont pas deja correctes. Une reparation ne redemande donc
+        # rien tant que le port et le chemin du jeu n'ont pas change.
+        $fw = Set-GbeFirewallRule -Exe $ctx.GameExe -Port $port
+
         return @{
             BackupPath   = $(if ($backedUp) { $backup } else { $null })
             OriginalHash = $originalHash
             SteamId      = $id
             PlayerName   = $name
             Port         = $port
+            FirewallOk   = [bool]$fw
         }
     }
 
@@ -212,5 +301,7 @@ ip_country=FR
 
         Remove-IfPresent (Join-Path $ctx.GamePath 'steam_settings') 'steam_settings\' | Out-Null
         Remove-IfPresent (Join-Path $ctx.GamePath 'steam_appid.txt') 'steam_appid.txt' | Out-Null
+
+        Remove-GbeFirewallRule
     }
 }

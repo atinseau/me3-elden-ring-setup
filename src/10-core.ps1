@@ -180,6 +180,65 @@ function Expand-Download {
     return $out
 }
 
+# ---------------------------------------------------------------------------- #
+#  Elevation ponctuelle
+#
+#  L'installeur s'execute sans droits administrateur. Certaines etapes en ont
+#  pourtant besoin (les regles de pare-feu). Plutot que d'exiger une elevation
+#  pour tout le script, on n'eleve que le fragment concerne, et seulement quand
+#  c'est reellement necessaire.
+# ---------------------------------------------------------------------------- #
+
+function Test-IsAdmin {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    return ([Security.Principal.WindowsPrincipal]$id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Invoke-Elevated {
+    <#
+        Execute un fragment PowerShell avec les droits administrateur.
+        Deja administrateur : execute sur place, sans invite UAC.
+        Sinon : relance un PowerShell eleve. Un refus de l'invite UAC n'est pas
+        une erreur fatale, l'appelant decide quoi en faire.
+
+        Retourne $true si le fragment s'est execute et a rendu 0.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Script,
+        [Parameter(Mandatory)][string]$Purpose
+    )
+
+    if (Test-IsAdmin) {
+        try {
+            & ([scriptblock]::Create($Script))
+            return $true
+        }
+        catch {
+            Write-Log "$Purpose : $($_.Exception.Message)" -Level Warn
+            return $false
+        }
+    }
+
+    Write-Log "elevation demandee pour : $Purpose"
+    Write-Log 'accepte l''invite Windows qui vient d''apparaitre.'
+
+    # EncodedCommand : le fragment traverse la frontiere de processus sans etre
+    # deforme par les regles de quoting de la ligne de commande.
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Script))
+    try {
+        $p = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden `
+            -ArgumentList "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $b64"
+        if ($p.ExitCode -eq 0) { return $true }
+        Write-Log "$Purpose : le processus eleve a retourne $($p.ExitCode)" -Level Warn
+        return $false
+    }
+    catch {
+        # Cas courant : l'utilisateur a refuse l'invite UAC.
+        Write-Log "$Purpose : elevation refusee ou impossible" -Level Warn
+        return $false
+    }
+}
+
 # Execute un exe natif en capturant sa sortie sans utiliser de redirection.
 # En Windows PowerShell 5.1, "2>$null" sur un exe natif emballe chaque ligne de
 # stderr dans un ErrorRecord (NativeCommandError) et fait echouer l'appel, alors

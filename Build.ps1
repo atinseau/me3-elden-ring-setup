@@ -69,7 +69,10 @@ function Add-Part {
         throw "erreur de syntaxe dans $Label"
     }
 
-    $text = Get-Content $Path -Raw
+    # -Encoding UTF8 est indispensable : sans lui, PowerShell 5.1 lit un fichier
+    # UTF-8 sans BOM comme de l'ANSI, et les caracteres accentues ressortent
+    # doublement encodes dans l'artefact compile.
+    $text = Get-Content $Path -Raw -Encoding UTF8
     $parts.Add("#region ---- $Label " + ('-' * [Math]::Max(1, 60 - $Label.Length)))
     $parts.Add($text.TrimEnd())
     $parts.Add("#endregion`n")

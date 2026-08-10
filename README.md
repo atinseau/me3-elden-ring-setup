@@ -65,7 +65,10 @@ directement au choix des mods, puis à leurs réglages, puis à un résumé.
 
 Rien n'est écrit avant l'écran de résumé.
 
-## Modules livrés
+## Mods disponibles
+
+Les trois sont cochés par défaut : ensemble ils forment la stack LAN complète.
+Chacun s'installe et se retire indépendamment.
 
 | Clé | Mod | Version | Écrit dans le jeu |
 |---|---|---|---|
@@ -73,12 +76,73 @@ Rien n'est écrit avant l'écran de résumé.
 | `gbe-fork` | [gbe_fork](https://github.com/Detanup01/gbe_fork) | 2026_07_19 | **oui** |
 | `seamless-coop` | [Seamless Co-op](https://github.com/LukeYui/EldenRingSeamlessCoopRelease) | v1.9.8 | non |
 
+### `unlock-fps` — UnlockTheFps
+
+Lève la limite de 60 images par seconde. Contrairement aux déverrouilleurs plus
+anciens, il fonctionne aussi en **plein écran exclusif** : il corrige la constante
+60 Hz du jeu et accroche DXGI pour choisir le mode d'affichage le plus proche de
+la fréquence demandée, en conservant la VSync.
+
+*Réglage :* `Framerate` (défaut 120). À garder identique chez tous les joueurs —
+la physique d'Elden Ring dépend du framerate.
+
+### `gbe-fork` — émulateur Steam LAN
+
+Remplace l'API Steam par une implémentation locale. Plus besoin du client Steam
+ni d'Internet : les joueurs se découvrent par broadcast UDP sur le réseau local,
+puis échangent en TCP. C'est lui qui rend le jeu « LAN pur ».
+
+Il pose aussi les **règles de pare-feu** nécessaires, seule étape de l'installeur
+demandant une élévation.
+
+*Réglages :* `PlayerName` et `SteamId` (différents chez chacun), `Port`
+(défaut 47584, identique chez tous).
+
+C'est le seul mod à écrire dans le dossier du jeu — voir
+[pourquoi](#pourquoi-un-mod-écrit-dans-le-dossier-du-jeu). L'original est
+sauvegardé et restauré à la désinstallation, avec vérification du hash.
+
+### `seamless-coop` — Seamless Co-op
+
+Réécrit la couche P2P du jeu. Jusqu'à 6 joueurs dans le monde ouvert, sans mur de
+brouillard, sans déconnexion après un boss, avec Torrent pour tout le monde et les
+points de grâce synchronisés. Aucun contact avec les serveurs FromSoftware, EAC
+désactivé, sauvegardes séparées (extension `.co2` — tes parties solo ne sont pas
+touchées).
+
+La mise en relation se fait par un mot de passe partagé, sans matchmaking.
+
+*Réglage :* `CoopPassword` (défaut `eldenlan`). Identique chez tous les joueurs :
+c'est lui qui décide qui rejoint quelle partie.
+
+---
+
 Le script **ne redistribue aucun binaire** : tout est téléchargé depuis les
 dépôts officiels à l'exécution, avec vérification du checksum quand l'éditeur en
 publie un, et journalisation du SHA-256 constaté sinon.
 
 Si me3 est déjà installé, il est conservé — et la désinstallation n'y touche pas
 non plus, ni à tes autres profils.
+
+## Élévation
+
+L'installeur tourne **sans droits administrateur**, à une exception près : les
+règles de pare-feu du module `gbe-fork`.
+
+gbe_fork ouvre son socket d'écoute *à l'intérieur* du processus `eldenring.exe`,
+et Windows bloque par défaut les connexions **entrantes** vers un programme qu'il
+ne connaît pas. L'échec est silencieux : les autres joueurs ne te trouvent jamais
+et le jeu n'affiche rien. L'installeur pose donc lui-même deux règles entrantes,
+UDP et TCP, sur le port configuré, en profils privé et domaine.
+
+Seul ce fragment est élevé, via une invite Windows ponctuelle — le reste du script
+continue sans privilège. Les règles ne sont recréées que si elles manquent ou ne
+correspondent plus au chemin du jeu ou au port : une réparation ne redemande donc
+rien inutilement.
+
+Un refus de l'invite **n'interrompt pas l'installation**. Le mod est posé, un
+avertissement est affiché, et tu peux relancer en mode Réparer pour réessayer.
+La désinstallation retire les règles de la même façon.
 
 ## Ajouter un mod
 
@@ -190,29 +254,9 @@ y compris quand tu modifies la liste des mods.
 
 Il faut aussi la même version du jeu partout.
 
-### Pare-feu
-
-gbe_fork ouvre un socket d'écoute **à l'intérieur du processus `eldenring.exe`** :
-découverte des pairs par broadcast UDP sur le port configuré, puis TCP pour les
-données. Le pare-feu Windows bloque par défaut les connexions **entrantes** vers
-un programme qu'il ne connaît pas.
-
-Au premier lancement, une boîte « Autoriser l'accès » apparaît : accepte-la, en
-cochant **Réseaux privés**. Si tu la refuses ou qu'elle passe inaperçue, les
-autres joueurs ne te trouveront jamais — et le jeu n'affichera aucune erreur.
-
-Pour créer les règles à la main, dans un PowerShell **administrateur** :
-
-```powershell
-$exe = 'D:\Games\ELDEN RING\Game\eldenring.exe'   # adapte le chemin
-New-NetFirewallRule -DisplayName 'Elden Ring (me3 LAN) UDP' -Direction Inbound `
-    -Program $exe -Protocol UDP -LocalPort 47584 -Action Allow -Profile Private
-New-NetFirewallRule -DisplayName 'Elden Ring (me3 LAN) TCP' -Direction Inbound `
-    -Program $exe -Protocol TCP -LocalPort 47584 -Action Allow -Profile Private
-```
-
-L'installeur ne crée pas ces règles lui-même : cela demanderait les droits
-administrateur, alors qu'il s'en passe entièrement pour tout le reste.
+Le pare-feu est configuré automatiquement par `gbe-fork` : une invite Windows
+apparaît le temps de poser les deux règles, puis l'installeur reprend sans droits
+particuliers. Voir [Élévation](#élévation).
 
 ### Ce que ça ne fait pas revenir
 
