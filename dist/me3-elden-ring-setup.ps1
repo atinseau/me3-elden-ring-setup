@@ -2126,6 +2126,10 @@ function Show-SetupWizard {
 
         $status = New-Lbl '' 18 74 ($W - 40) 40
 
+        # TextChanged s'execute apres le retour de cette fonction : sans closure,
+        # $txt et $status n'existent plus. La closure perd en revanche les portees
+        # parentes, d'ou la copie locale de $btnNext.
+        $next = $btnNext
         $refresh = {
             if (Test-GamePath $txt.Text.Trim()) {
                 $status.ForeColor = [System.Drawing.Color]::DarkGreen
@@ -2139,8 +2143,8 @@ function Show-SetupWizard {
                 $status.ForeColor = [System.Drawing.Color]::Firebrick
                 $status.Text = "Jeu non detecte : indique le dossier manuellement."
             }
-            $btnNext.Enabled = (Test-GamePath $txt.Text.Trim())
-        }
+            $next.Enabled = (Test-GamePath $txt.Text.Trim())
+        }.GetNewClosure()
 
         $btn.Add_Click({
                 $d = New-Object System.Windows.Forms.FolderBrowserDialog
