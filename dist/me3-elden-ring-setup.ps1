@@ -1328,6 +1328,14 @@ Register-Me3Module @{
             Shared  = $true
             Help    = '"latest" prend la derniere version publiee sur le miroir officiel. Mets un tag precis (par exemple v1.9.0) si ta version du jeu demande une version plus ancienne. Tous les joueurs doivent avoir la meme.'
         }
+        @{
+            Key     = 'ModLanguage'
+            Label   = 'Langue du mod'
+            Type    = 'string'
+            Default = 'english'
+            Shared  = $false
+            Help    = 'Langue des messages du mod, pas du jeu. Les versions recentes ne livrent que l''anglais : laisser vide ferait afficher un avertissement « french not found » a chaque lancement. Mets le nom d''une locale livree avec le mod pour en changer.'
+        }
         # Les deux reglages suivants sont de la plomberie : ils contournent le
         # fait que Nexus interdit le telechargement automatise. L'assistant ne
         # les affiche pas, il demande le fichier au moment ou il en a besoin.
@@ -1498,9 +1506,21 @@ Seamless Co-op ne fonctionnera pas.
         Copy-Tree $coopDir.FullName (Join-Path $root 'SeamlessCoop')
 
         $pass = $ctx.Options.CoopPassword
+        $lang = "$($ctx.Options.ModLanguage)".Trim()
         $ini = Join-Path $root 'SeamlessCoop\ersc_settings.ini'
         $content = (Get-Content $ini -Raw) -replace '(?m)^\s*cooppassword\s*=.*$', "cooppassword = $pass"
+
+        # Sans valeur explicite, le mod suit la langue du jeu et avertit quand
+        # la traduction correspondante n'est pas livree, ce qui est le cas de
+        # toutes sauf l'anglais depuis la v1.9.x.
+        $content = $content -replace '(?m)^\s*mod_language_override\s*=.*$', "mod_language_override = $lang"
         Write-TextFile $ini $content
+
+        $locales = @(Get-ChildItem (Join-Path $root 'SeamlessCoop\locale') -Filter '*.json' -ErrorAction SilentlyContinue |
+                ForEach-Object { $_.BaseName })
+        if ($lang -and $locales.Count -and ($locales -notcontains $lang)) {
+            Write-Log "la langue '$lang' n'est pas livree par cette version (disponibles : $($locales -join ', '))" -Level Warn
+        }
 
         Write-Log "$($m.Name) $version installe (mot de passe : $pass)" -Level Ok
         if ($allowed -eq $false) {
