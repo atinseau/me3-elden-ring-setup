@@ -9,19 +9,52 @@ tout retirer en restaurant les fichiers d'origine du jeu.
 Les mods livrés par défaut forment une stack **multijoueur LAN pur** : aucun
 serveur FromSoftware, aucun client Steam, aucun accès Internet.
 
-```powershell
-# Assistant graphique
-.\me3-elden-ring-setup.ps1
+## Installation
 
-# Ligne de commande
+Ouvre un PowerShell, colle cette ligne, valide. L'assistant s'ouvre.
+
+```powershell
+$s="$env:TEMP\me3-setup.ps1"; irm https://raw.githubusercontent.com/atinseau/me3-elden-ring-setup/main/dist/me3-elden-ring-setup.ps1 -OutFile $s; powershell -NoProfile -ExecutionPolicy Bypass -File $s
+```
+
+Elle télécharge le script dans le dossier temporaire, puis le lance dans un
+PowerShell dédié. Pas besoin d'être administrateur.
+
+### Pourquoi ce `-ExecutionPolicy Bypass`
+
+Windows refuse par défaut d'exécuter les fichiers `.ps1` : la politique
+d'exécution vaut `Restricted` sur une machine neuve. Un script collé *à la main*
+dans la console passe, un script *lancé depuis un fichier* est bloqué — d'où
+l'échec si tu te contentes de `.\me3-elden-ring-setup.ps1`.
+
+`-ExecutionPolicy Bypass` lève la restriction **pour ce seul processus**. Rien
+n'est modifié durablement sur la machine, et ta politique globale reste ce
+qu'elle était. C'est pour cette raison que la commande ci-dessus démarre un
+nouveau PowerShell au lieu d'exécuter le script dans ton shell courant.
+
+Pour voir ta politique actuelle : `Get-ExecutionPolicy -List`
+
+### Depuis un fichier téléchargé à la main
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\me3-elden-ring-setup.ps1
+```
+
+Si tu l'as récupéré via un navigateur, Windows y appose une marque « fichier
+venu d'Internet » qui le bloque même en Bypass. À retirer une fois :
+
+```powershell
+Unblock-File .\me3-elden-ring-setup.ps1
+```
+
+### En ligne de commande
+
+```powershell
 .\me3-elden-ring-setup.ps1 -ListModules
 .\me3-elden-ring-setup.ps1 -Mode Install -NoGui -Modules unlock-fps,gbe-fork,seamless-coop `
     -Option @{ PlayerName = 'bob'; CoopPassword = 'hidetower'; Framerate = 144 }
 .\me3-elden-ring-setup.ps1 -Mode Uninstall -NoGui
 ```
-
-Si Windows bloque l'exécution :
-`powershell -ExecutionPolicy Bypass -File .\me3-elden-ring-setup.ps1`
 
 ## L'assistant
 
@@ -155,9 +188,31 @@ Doivent être **différents** chez chacun : le pseudo et le SteamID64. L'install
 génère un identifiant unique à la première installation et le **conserve** ensuite,
 y compris quand tu modifies la liste des mods.
 
-Il faut aussi la même version du jeu partout, et autoriser `eldenring.exe` dans le
-pare-feu en **UDP et TCP** : gbe_fork découvre les pairs par broadcast UDP puis
-ouvre du TCP pour les données.
+Il faut aussi la même version du jeu partout.
+
+### Pare-feu
+
+gbe_fork ouvre un socket d'écoute **à l'intérieur du processus `eldenring.exe`** :
+découverte des pairs par broadcast UDP sur le port configuré, puis TCP pour les
+données. Le pare-feu Windows bloque par défaut les connexions **entrantes** vers
+un programme qu'il ne connaît pas.
+
+Au premier lancement, une boîte « Autoriser l'accès » apparaît : accepte-la, en
+cochant **Réseaux privés**. Si tu la refuses ou qu'elle passe inaperçue, les
+autres joueurs ne te trouveront jamais — et le jeu n'affichera aucune erreur.
+
+Pour créer les règles à la main, dans un PowerShell **administrateur** :
+
+```powershell
+$exe = 'D:\Games\ELDEN RING\Game\eldenring.exe'   # adapte le chemin
+New-NetFirewallRule -DisplayName 'Elden Ring (me3 LAN) UDP' -Direction Inbound `
+    -Program $exe -Protocol UDP -LocalPort 47584 -Action Allow -Profile Private
+New-NetFirewallRule -DisplayName 'Elden Ring (me3 LAN) TCP' -Direction Inbound `
+    -Program $exe -Protocol TCP -LocalPort 47584 -Action Allow -Profile Private
+```
+
+L'installeur ne crée pas ces règles lui-même : cela demanderait les droits
+administrateur, alors qu'il s'en passe entièrement pour tout le reste.
 
 ### Ce que ça ne fait pas revenir
 
