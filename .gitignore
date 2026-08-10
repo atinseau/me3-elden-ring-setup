@@ -1,0 +1,7 @@
+# artefacts de travail
+*.zip
+*.7z
+state.json
+
+# l'artefact compile EST le livrable : il reste versionne
+!dist/me3-elden-ring-setup.ps1
