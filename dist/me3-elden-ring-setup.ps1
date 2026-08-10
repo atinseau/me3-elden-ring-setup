@@ -719,6 +719,11 @@ function Register-Me3Module {
             Downloads     = @{}
             Uninstall     = { param($ctx, $st) }
             ProfileToml   = { param($ctx) return @{ Natives = ''; Packages = '' } }
+            # Verification prealable, executee par l'assistant avant le resume.
+            # Retourne $null si tout va bien, sinon un blocage a resoudre :
+            #   @{ Title; Message; LinkUrl; LinkLabel; OptionKey; Filter }
+            # OptionKey designe l'option a renseigner avec un fichier choisi.
+            Preflight     = { param($options) return $null }
         }.GetEnumerator()) {
         if (-not $Module.ContainsKey($kv.Key)) { $Module[$kv.Key] = $kv.Value }
     }
@@ -1272,7 +1277,7 @@ Register-Me3Module @{
     Name    = 'Seamless Co-op'
     Version = 'derniere publiee'
     Summary = 'Remplace le P2P du jeu : jusqu''a 6 joueurs, sans mur de brouillard ni deconnexion apres un boss. Session privee par mot de passe.'
-    Url     = 'https://github.com/LukeYui/EldenRingSeamlessCoopRelease'
+    Url     = 'https://github.com/yuiamoroll/EldenRingSeamlessCoopRelease'
     Default = $true
     Order   = 30
 
@@ -1295,23 +1300,74 @@ Register-Me3Module @{
             Shared  = $true
             Help    = '"latest" prend la derniere version publiee sur le miroir officiel. Mets un tag precis (par exemple v1.9.0) si ta version du jeu demande une version plus ancienne. Tous les joueurs doivent avoir la meme.'
         }
+        # Les deux reglages suivants sont de la plomberie : ils contournent le
+        # fait que Nexus interdit le telechargement automatise. L'assistant ne
+        # les affiche pas, il demande le fichier au moment ou il en a besoin.
+        # Ils restent accessibles en ligne de commande.
         @{
-            Key     = 'ErscUrl'
-            Label   = 'URL directe (miroir perso)'
-            Type    = 'string'
-            Default = ''
-            Shared  = $true
-            Help    = 'URL d''une archive .zip a telecharger, par exemple ton propre miroir. Utile quand le miroir officiel prend du retard sur Nexus, qui interdit le telechargement automatise. Prioritaire sur le reglage Version.'
+            Key      = 'ErscUrl'
+            Label    = 'URL directe (miroir)'
+            Type     = 'string'
+            Default  = ''
+            Shared   = $true
+            Advanced = $true
+            Help     = 'URL d''une archive .zip a telecharger, par exemple ton propre miroir. Prioritaire sur le reglage Version.'
         }
         @{
-            Key     = 'ErscArchive'
-            Label   = 'Archive .zip locale'
-            Type    = 'string'
-            Default = ''
-            Shared  = $true
-            Help    = 'Chemin d''une archive deja telechargee sur ce PC. Prioritaire sur tout le reste.'
+            Key      = 'ErscArchive'
+            Label    = 'Archive .zip locale'
+            Type     = 'string'
+            Default  = ''
+            Shared   = $true
+            Advanced = $true
+            Help     = 'Chemin d''une archive deja telechargee sur ce PC. Prioritaire sur tout le reste.'
         }
     )
+
+    Preflight = {
+        param($options)
+
+        # Deja resolu par l'utilisateur ou par la CLI : rien a demander.
+        if ("$($options.ErscArchive)".Trim() -or "$($options.ErscUrl)".Trim()) { return $null }
+
+        $wanted = "$($options.ErscVersion)".Trim()
+        if ($wanted -and $wanted -ne 'latest') { return $null }
+
+        $policy = Get-ErscVersionPolicy
+        if (-not $policy) { return $null }
+
+        $m = Get-Me3Module 'seamless-coop'
+        foreach ($r in (Get-GitHubReleaseList -Repo $m.Repo)) {
+            if ((Test-ErscVersionAllowed $policy $r.tag_name) -ne $false) { return $null }
+        }
+
+        $min = Get-ErscMinimumAllowed $policy
+        $seuil = 'plus recente'
+        if ($min) { $seuil = "superieure a $min" }
+
+        return @{
+            Title     = 'Seamless Co-op : telechargement manuel'
+            Message   = @"
+L'auteur de Seamless Co-op refuse desormais toutes les versions publiees sur son
+miroir GitHub : le mod se declarerait perime et ne demarrerait pas.
+
+Il faut une version $seuil, disponible uniquement sur Nexus Mods, qui exige un
+compte et interdit le telechargement automatise. C'est la seule etape que
+l'installeur ne peut pas faire a ta place.
+
+  1. Ouvre la page ci-dessous, onglet FILES
+  2. Bouton MANUAL DOWNLOAD sur la derniere version
+  3. Indique ici le fichier .zip telecharge
+
+Tu peux aussi continuer sans : les autres mods s'installeront normalement, mais
+Seamless Co-op ne fonctionnera pas.
+"@
+            LinkUrl   = 'https://www.nexusmods.com/eldenring/mods/510?tab=files'
+            LinkLabel = 'Ouvrir la page Nexus'
+            OptionKey = 'ErscArchive'
+            Filter    = 'Archive Seamless Co-op|*.zip|Tous les fichiers|*.*'
+        }
+    }
 
     # Le depot officiel du mod, sous le nom actuel du compte de son auteur
     # (anciennement LukeYui). La version n'est pas epinglee : elle est resolue
@@ -1926,6 +1982,8 @@ function Show-SetupWizard {
         Page       = 0
         Done       = $false
         Running    = $false
+        Blocker    = $null
+        BlockerModule = $null
     }
 
     $detected = $GamePath
@@ -1961,9 +2019,33 @@ function Show-SetupWizard {
     function Get-PageFlow {
         $flow = @('game')
         if ($st.State) { $flow += 'action' }
-        if ($st.Action -eq 'Install') { $flow += @('mods', 'options') }
+        if ($st.Action -eq 'Install') {
+            $flow += @('mods', 'options')
+            # Etape conditionnelle : n'existe que si un module signale un
+            # blocage a resoudre avant l'installation.
+            if ($st.Blocker) { $flow += 'preflight' }
+        }
         $flow += @('summary', 'run')
         return $flow
+    }
+
+    # Interroge les modules retenus. Le resultat conditionne le flux des pages,
+    # il est donc calcule au moment de quitter l'ecran des reglages.
+    function Update-Blocker {
+        $st.Blocker = $null
+        if ($st.Action -ne 'Install') { return }
+        try {
+            $mods = @(Resolve-ModuleSelection $st.Selection)
+            $opts = Resolve-Options -ModuleList $mods -Previous $priorOptions -Provided $st.Options
+            foreach ($m in $mods) {
+                $b = & $m.Preflight $opts
+                if ($b) { $st.Blocker = $b; $st.BlockerModule = $m.Key; break }
+            }
+        }
+        catch {
+            # Pas de reseau, API indisponible : on n'empeche pas d'avancer.
+            $st.Blocker = $null
+        }
     }
 
     # ----------------------------------------------------------------- pages #
@@ -2161,6 +2243,10 @@ function Show-SetupWizard {
             $y += 24
 
             foreach ($o in $m.Options) {
+                # Les reglages techniques ne sont pas montres : l'assistant les
+                # demande au moment ou ils servent, via l'etape de verification.
+                if ($o.ContainsKey('Advanced') -and $o.Advanced) { continue }
+
                 $tag = 'different chez chacun'
                 if ($o.Shared) { $tag = 'identique chez tous' }
                 $panel.Controls.Add((New-Lbl "$($o.Label)  ($tag)" 36 $y 380 18))
@@ -2198,6 +2284,68 @@ function Show-SetupWizard {
             return $false
         }
         $st.Options = $vals
+        return $true
+    }
+
+    function Show-PagePreflight {
+        $b = $st.Blocker
+        $lblTitle.Text = $b.Title
+        $lblSub.Text = 'Une seule etape ne peut pas etre automatisee.'
+
+        $txt = New-Object System.Windows.Forms.TextBox
+        $txt.Multiline = $true; $txt.ReadOnly = $true; $txt.ScrollBars = 'Vertical'
+        $txt.Location = New-Object System.Drawing.Point(18, 8)
+        $txt.Size = New-Object System.Drawing.Size(($W - 40), 190)
+        $txt.BackColor = [System.Drawing.Color]::White
+        $txt.Text = ($b.Message -replace "`r?`n", "`r`n")
+
+        $btnLink = New-Object System.Windows.Forms.Button
+        $btnLink.Text = $b.LinkLabel
+        $btnLink.Location = New-Object System.Drawing.Point(18, 206)
+        $btnLink.Size = New-Object System.Drawing.Size(200, 30)
+        $url = $b.LinkUrl
+        $btnLink.Add_Click({ Start-Process $url }.GetNewClosure())
+
+        $lbl = New-Lbl 'Fichier .zip telecharge' 18 250 300 20
+
+        $box = New-Object System.Windows.Forms.TextBox
+        $box.Location = New-Object System.Drawing.Point(18, 272)
+        $box.Size = New-Object System.Drawing.Size(($W - 150), 22)
+        $box.Name = 'archive'
+        $existing = $st.Options[$b.OptionKey]
+        if ($existing) { $box.Text = "$existing" }
+
+        $btnBrowse = New-Object System.Windows.Forms.Button
+        $btnBrowse.Text = 'Parcourir'
+        $btnBrowse.Location = New-Object System.Drawing.Point(($W - 126), 271)
+        $btnBrowse.Size = New-Object System.Drawing.Size(100, 24)
+        $filter = $b.Filter
+        $btnBrowse.Add_Click({
+                $d = New-Object System.Windows.Forms.OpenFileDialog
+                $d.Filter = $filter
+                $d.InitialDirectory = (Join-Path $env:USERPROFILE 'Downloads')
+                if ($d.ShowDialog() -eq 'OK') { $box.Text = $d.FileName }
+            }.GetNewClosure())
+
+        $body.Controls.AddRange(@($txt, $btnLink, $lbl, $box, $btnBrowse))
+    }
+
+    function Save-PagePreflight {
+        $b = $st.Blocker
+        $box = $body.Controls['archive']
+        $path = $box.Text.Trim()
+
+        if (-not $path) {
+            $r = [System.Windows.Forms.MessageBox]::Show(
+                "Continuer sans Seamless Co-op fonctionnel ?`r`n`r`nLes autres mods seront installes normalement.",
+                'Aucun fichier indique', 'YesNo', 'Warning')
+            return ($r -eq 'Yes')
+        }
+        if (-not (Test-Path -LiteralPath $path)) {
+            [System.Windows.Forms.MessageBox]::Show('Ce fichier est introuvable.', 'Fichier', 'OK', 'Warning') | Out-Null
+            return $false
+        }
+        $st.Options[$b.OptionKey] = $path
         return $true
     }
 
@@ -2374,6 +2522,7 @@ function Show-SetupWizard {
             'action' { Show-PageAction }
             'mods' { Show-PageMods }
             'options' { Show-PageOptions }
+            'preflight' { Show-PagePreflight }
             'summary' { Show-PageSummary }
             'run' { Show-PageRun }
         }
@@ -2390,8 +2539,20 @@ function Show-SetupWizard {
                 'action' { $ok = Save-PageAction }
                 'mods' { $ok = Save-PageMods }
                 'options' { $ok = Save-PageOptions }
+                'preflight' { $ok = Save-PagePreflight }
             }
             if (-not $ok) { return }
+
+            # Les verifications reseau ne sont lancees qu'en quittant les
+            # reglages : elles dependent des modules et options retenus.
+            if ($page -eq 'options') {
+                $btnNext.Enabled = $false
+                $btnNext.Text = 'Verification...'
+                [System.Windows.Forms.Application]::DoEvents()
+                Update-Blocker
+                $btnNext.Enabled = $true
+                $btnNext.Text = 'Suivant >'
+            }
 
             # Le flux depend de l'action choisie : on le relit apres coup.
             $flow = Get-PageFlow
@@ -2438,6 +2599,9 @@ function Show-ModuleList {
         foreach ($o in $m.Options) {
             $scope = 'different chez chacun'
             if ($o.Shared) { $scope = 'identique chez tous' }
+            # Les reglages techniques ne sont pas montres par l'assistant, qui
+            # les demande au moment utile : on le signale ici.
+            if ($o.ContainsKey('Advanced') -and $o.Advanced) { $scope = 'avance, masque dans l''assistant' }
             Write-Host ("                       -Option @{{ {0} = ... }}  defaut '{1}'  ({2})" -f $o.Key, $o.Default, $scope) -ForegroundColor DarkGray
         }
         Write-Host ''

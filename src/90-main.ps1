@@ -17,6 +17,9 @@ function Show-ModuleList {
         foreach ($o in $m.Options) {
             $scope = 'different chez chacun'
             if ($o.Shared) { $scope = 'identique chez tous' }
+            # Les reglages techniques ne sont pas montres par l'assistant, qui
+            # les demande au moment utile : on le signale ici.
+            if ($o.ContainsKey('Advanced') -and $o.Advanced) { $scope = 'avance, masque dans l''assistant' }
             Write-Host ("                       -Option @{{ {0} = ... }}  defaut '{1}'  ({2})" -f $o.Key, $o.Default, $scope) -ForegroundColor DarkGray
         }
         Write-Host ''

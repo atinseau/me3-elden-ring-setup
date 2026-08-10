@@ -52,6 +52,11 @@ function Register-Me3Module {
             Downloads     = @{}
             Uninstall     = { param($ctx, $st) }
             ProfileToml   = { param($ctx) return @{ Natives = ''; Packages = '' } }
+            # Verification prealable, executee par l'assistant avant le resume.
+            # Retourne $null si tout va bien, sinon un blocage a resoudre :
+            #   @{ Title; Message; LinkUrl; LinkLabel; OptionKey; Filter }
+            # OptionKey designe l'option a renseigner avec un fichier choisi.
+            Preflight     = { param($options) return $null }
         }.GetEnumerator()) {
         if (-not $Module.ContainsKey($kv.Key)) { $Module[$kv.Key] = $kv.Value }
     }

@@ -95,7 +95,7 @@ Register-Me3Module @{
     Name    = 'Seamless Co-op'
     Version = 'derniere publiee'
     Summary = 'Remplace le P2P du jeu : jusqu''a 6 joueurs, sans mur de brouillard ni deconnexion apres un boss. Session privee par mot de passe.'
-    Url     = 'https://github.com/LukeYui/EldenRingSeamlessCoopRelease'
+    Url     = 'https://github.com/yuiamoroll/EldenRingSeamlessCoopRelease'
     Default = $true
     Order   = 30
 
@@ -118,23 +118,74 @@ Register-Me3Module @{
             Shared  = $true
             Help    = '"latest" prend la derniere version publiee sur le miroir officiel. Mets un tag precis (par exemple v1.9.0) si ta version du jeu demande une version plus ancienne. Tous les joueurs doivent avoir la meme.'
         }
+        # Les deux reglages suivants sont de la plomberie : ils contournent le
+        # fait que Nexus interdit le telechargement automatise. L'assistant ne
+        # les affiche pas, il demande le fichier au moment ou il en a besoin.
+        # Ils restent accessibles en ligne de commande.
         @{
-            Key     = 'ErscUrl'
-            Label   = 'URL directe (miroir perso)'
-            Type    = 'string'
-            Default = ''
-            Shared  = $true
-            Help    = 'URL d''une archive .zip a telecharger, par exemple ton propre miroir. Utile quand le miroir officiel prend du retard sur Nexus, qui interdit le telechargement automatise. Prioritaire sur le reglage Version.'
+            Key      = 'ErscUrl'
+            Label    = 'URL directe (miroir)'
+            Type     = 'string'
+            Default  = ''
+            Shared   = $true
+            Advanced = $true
+            Help     = 'URL d''une archive .zip a telecharger, par exemple ton propre miroir. Prioritaire sur le reglage Version.'
         }
         @{
-            Key     = 'ErscArchive'
-            Label   = 'Archive .zip locale'
-            Type    = 'string'
-            Default = ''
-            Shared  = $true
-            Help    = 'Chemin d''une archive deja telechargee sur ce PC. Prioritaire sur tout le reste.'
+            Key      = 'ErscArchive'
+            Label    = 'Archive .zip locale'
+            Type     = 'string'
+            Default  = ''
+            Shared   = $true
+            Advanced = $true
+            Help     = 'Chemin d''une archive deja telechargee sur ce PC. Prioritaire sur tout le reste.'
         }
     )
+
+    Preflight = {
+        param($options)
+
+        # Deja resolu par l'utilisateur ou par la CLI : rien a demander.
+        if ("$($options.ErscArchive)".Trim() -or "$($options.ErscUrl)".Trim()) { return $null }
+
+        $wanted = "$($options.ErscVersion)".Trim()
+        if ($wanted -and $wanted -ne 'latest') { return $null }
+
+        $policy = Get-ErscVersionPolicy
+        if (-not $policy) { return $null }
+
+        $m = Get-Me3Module 'seamless-coop'
+        foreach ($r in (Get-GitHubReleaseList -Repo $m.Repo)) {
+            if ((Test-ErscVersionAllowed $policy $r.tag_name) -ne $false) { return $null }
+        }
+
+        $min = Get-ErscMinimumAllowed $policy
+        $seuil = 'plus recente'
+        if ($min) { $seuil = "superieure a $min" }
+
+        return @{
+            Title     = 'Seamless Co-op : telechargement manuel'
+            Message   = @"
+L'auteur de Seamless Co-op refuse desormais toutes les versions publiees sur son
+miroir GitHub : le mod se declarerait perime et ne demarrerait pas.
+
+Il faut une version $seuil, disponible uniquement sur Nexus Mods, qui exige un
+compte et interdit le telechargement automatise. C'est la seule etape que
+l'installeur ne peut pas faire a ta place.
+
+  1. Ouvre la page ci-dessous, onglet FILES
+  2. Bouton MANUAL DOWNLOAD sur la derniere version
+  3. Indique ici le fichier .zip telecharge
+
+Tu peux aussi continuer sans : les autres mods s'installeront normalement, mais
+Seamless Co-op ne fonctionnera pas.
+"@
+            LinkUrl   = 'https://www.nexusmods.com/eldenring/mods/510?tab=files'
+            LinkLabel = 'Ouvrir la page Nexus'
+            OptionKey = 'ErscArchive'
+            Filter    = 'Archive Seamless Co-op|*.zip|Tous les fichiers|*.*'
+        }
+    }
 
     # Le depot officiel du mod, sous le nom actuel du compte de son auteur
     # (anciennement LukeYui). La version n'est pas epinglee : elle est resolue

@@ -116,25 +116,37 @@ La mise en relation se fait par un mot de passe partagé, sans matchmaking.
 c'est lui qui décide qui rejoint quelle partie. Et `ErscArchive`, optionnel —
 voir ci-dessous.
 
-#### Version : résolue automatiquement
+#### La version est gérée pour toi
 
-Seamless Co-op embarque un contrôle de version et refuse de démarrer dès qu'une
-version plus récente existe — message *« This version of Seamless Co-op is out of
-date »*. Épingler une version dans le code condamnerait donc l'installeur à se
-périmer.
+L'auteur du mod maintient un fichier `VERSION` à la racine de son dépôt, que
+Seamless Co-op télécharge à chaque lancement. Chaque version y est marquée `0` ou
+`1`, et une version marquée `0` refuse de démarrer : *« This version of Seamless
+Co-op is out of date »*. Ce n'est **pas** lié à la version du jeu.
 
-`ErscVersion` vaut `latest` par défaut : la dernière version publiée est résolue
-à l'exécution depuis le dépôt officiel, à chaque installation ou réparation.
+L'installeur lit cette liste et retient la version la plus récente **encore
+autorisée**. Rien à régler.
 
-Si ta version du jeu demande une version plus ancienne du mod, mets un tag précis :
+Quand aucune version du miroir GitHub n'est autorisée — ce qui arrive, Nexus
+publiant avant le miroir — l'assistant ajoute une étape : il explique la
+situation, ouvre la page Nexus, et te demande le `.zip`. C'est la seule chose que
+l'installeur ne peut pas faire seul, Nexus exigeant un compte et interdisant le
+téléchargement automatisé.
+
+En ligne de commande, trois réglages avancés couvrent les mêmes cas :
 
 ```powershell
-.\me3-elden-ring-setup.ps1 -Mode Repair -NoGui -Option @{ ErscVersion = 'v1.9.0' }
+# archive déjà téléchargée
+-Option @{ ErscArchive = 'C:\Users\toi\Downloads\SeamlessCoop.zip' }
+
+# miroir que tu héberges
+-Option @{ ErscUrl = 'https://exemple.org/ersc.zip' }
+
+# version précise du miroir officiel
+-Option @{ ErscVersion = 'v1.9.0' }
 ```
 
-Tous les joueurs doivent utiliser la même. En dernier recours, si le miroir prend
-du retard sur Nexus, `ErscArchive` accepte le chemin d'une archive téléchargée à
-la main — l'installeur y localise `ersc.dll` quelle que soit son arborescence.
+Priorité : `ErscArchive`, puis `ErscUrl`, puis `ErscVersion`. Tous les joueurs
+doivent utiliser la même version.
 
 ---
 

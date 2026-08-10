@@ -82,6 +82,8 @@ function Show-SetupWizard {
         Page       = 0
         Done       = $false
         Running    = $false
+        Blocker    = $null
+        BlockerModule = $null
     }
 
     $detected = $GamePath
@@ -117,9 +119,33 @@ function Show-SetupWizard {
     function Get-PageFlow {
         $flow = @('game')
         if ($st.State) { $flow += 'action' }
-        if ($st.Action -eq 'Install') { $flow += @('mods', 'options') }
+        if ($st.Action -eq 'Install') {
+            $flow += @('mods', 'options')
+            # Etape conditionnelle : n'existe que si un module signale un
+            # blocage a resoudre avant l'installation.
+            if ($st.Blocker) { $flow += 'preflight' }
+        }
         $flow += @('summary', 'run')
         return $flow
+    }
+
+    # Interroge les modules retenus. Le resultat conditionne le flux des pages,
+    # il est donc calcule au moment de quitter l'ecran des reglages.
+    function Update-Blocker {
+        $st.Blocker = $null
+        if ($st.Action -ne 'Install') { return }
+        try {
+            $mods = @(Resolve-ModuleSelection $st.Selection)
+            $opts = Resolve-Options -ModuleList $mods -Previous $priorOptions -Provided $st.Options
+            foreach ($m in $mods) {
+                $b = & $m.Preflight $opts
+                if ($b) { $st.Blocker = $b; $st.BlockerModule = $m.Key; break }
+            }
+        }
+        catch {
+            # Pas de reseau, API indisponible : on n'empeche pas d'avancer.
+            $st.Blocker = $null
+        }
     }
 
     # ----------------------------------------------------------------- pages #
@@ -317,6 +343,10 @@ function Show-SetupWizard {
             $y += 24
 
             foreach ($o in $m.Options) {
+                # Les reglages techniques ne sont pas montres : l'assistant les
+                # demande au moment ou ils servent, via l'etape de verification.
+                if ($o.ContainsKey('Advanced') -and $o.Advanced) { continue }
+
                 $tag = 'different chez chacun'
                 if ($o.Shared) { $tag = 'identique chez tous' }
                 $panel.Controls.Add((New-Lbl "$($o.Label)  ($tag)" 36 $y 380 18))
@@ -354,6 +384,68 @@ function Show-SetupWizard {
             return $false
         }
         $st.Options = $vals
+        return $true
+    }
+
+    function Show-PagePreflight {
+        $b = $st.Blocker
+        $lblTitle.Text = $b.Title
+        $lblSub.Text = 'Une seule etape ne peut pas etre automatisee.'
+
+        $txt = New-Object System.Windows.Forms.TextBox
+        $txt.Multiline = $true; $txt.ReadOnly = $true; $txt.ScrollBars = 'Vertical'
+        $txt.Location = New-Object System.Drawing.Point(18, 8)
+        $txt.Size = New-Object System.Drawing.Size(($W - 40), 190)
+        $txt.BackColor = [System.Drawing.Color]::White
+        $txt.Text = ($b.Message -replace "`r?`n", "`r`n")
+
+        $btnLink = New-Object System.Windows.Forms.Button
+        $btnLink.Text = $b.LinkLabel
+        $btnLink.Location = New-Object System.Drawing.Point(18, 206)
+        $btnLink.Size = New-Object System.Drawing.Size(200, 30)
+        $url = $b.LinkUrl
+        $btnLink.Add_Click({ Start-Process $url }.GetNewClosure())
+
+        $lbl = New-Lbl 'Fichier .zip telecharge' 18 250 300 20
+
+        $box = New-Object System.Windows.Forms.TextBox
+        $box.Location = New-Object System.Drawing.Point(18, 272)
+        $box.Size = New-Object System.Drawing.Size(($W - 150), 22)
+        $box.Name = 'archive'
+        $existing = $st.Options[$b.OptionKey]
+        if ($existing) { $box.Text = "$existing" }
+
+        $btnBrowse = New-Object System.Windows.Forms.Button
+        $btnBrowse.Text = 'Parcourir'
+        $btnBrowse.Location = New-Object System.Drawing.Point(($W - 126), 271)
+        $btnBrowse.Size = New-Object System.Drawing.Size(100, 24)
+        $filter = $b.Filter
+        $btnBrowse.Add_Click({
+                $d = New-Object System.Windows.Forms.OpenFileDialog
+                $d.Filter = $filter
+                $d.InitialDirectory = (Join-Path $env:USERPROFILE 'Downloads')
+                if ($d.ShowDialog() -eq 'OK') { $box.Text = $d.FileName }
+            }.GetNewClosure())
+
+        $body.Controls.AddRange(@($txt, $btnLink, $lbl, $box, $btnBrowse))
+    }
+
+    function Save-PagePreflight {
+        $b = $st.Blocker
+        $box = $body.Controls['archive']
+        $path = $box.Text.Trim()
+
+        if (-not $path) {
+            $r = [System.Windows.Forms.MessageBox]::Show(
+                "Continuer sans Seamless Co-op fonctionnel ?`r`n`r`nLes autres mods seront installes normalement.",
+                'Aucun fichier indique', 'YesNo', 'Warning')
+            return ($r -eq 'Yes')
+        }
+        if (-not (Test-Path -LiteralPath $path)) {
+            [System.Windows.Forms.MessageBox]::Show('Ce fichier est introuvable.', 'Fichier', 'OK', 'Warning') | Out-Null
+            return $false
+        }
+        $st.Options[$b.OptionKey] = $path
         return $true
     }
 
@@ -530,6 +622,7 @@ function Show-SetupWizard {
             'action' { Show-PageAction }
             'mods' { Show-PageMods }
             'options' { Show-PageOptions }
+            'preflight' { Show-PagePreflight }
             'summary' { Show-PageSummary }
             'run' { Show-PageRun }
         }
@@ -546,8 +639,20 @@ function Show-SetupWizard {
                 'action' { $ok = Save-PageAction }
                 'mods' { $ok = Save-PageMods }
                 'options' { $ok = Save-PageOptions }
+                'preflight' { $ok = Save-PagePreflight }
             }
             if (-not $ok) { return }
+
+            # Les verifications reseau ne sont lancees qu'en quittant les
+            # reglages : elles dependent des modules et options retenus.
+            if ($page -eq 'options') {
+                $btnNext.Enabled = $false
+                $btnNext.Text = 'Verification...'
+                [System.Windows.Forms.Application]::DoEvents()
+                Update-Blocker
+                $btnNext.Enabled = $true
+                $btnNext.Text = 'Suivant >'
+            }
 
             # Le flux depend de l'action choisie : on le relit apres coup.
             $flow = Get-PageFlow
