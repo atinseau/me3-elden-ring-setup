@@ -200,6 +200,12 @@ function Write-ResultSummary {
             Write-Log 'ATTENTION : les regles de pare-feu n''ont pas pu etre creees.'
             Write-Log 'Relance en mode Reparer et accepte l''invite, sinon personne ne te trouvera.'
         }
+        if ($st.ContainsKey('VersionAllowed') -and $st['VersionAllowed'] -eq $false) {
+            Write-Log ''
+            Write-Log 'ATTENTION : la version installee de Seamless Co-op est refusee par son auteur.'
+            Write-Log 'Le jeu affichera « out of date » et le mod ne demarrera pas.'
+            Write-Log 'Recupere l''archive courante sur Nexus, puis renseigne le reglage « Archive .zip ».'
+        }
     }
     Write-Log ''
     Write-Log "Lance la partie avec le raccourci 'Elden Ring (me3)' sur le bureau."

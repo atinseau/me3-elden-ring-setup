@@ -360,6 +360,20 @@ function Invoke-Elevated {
 #  Co-op le fait) doivent pouvoir suivre automatiquement.
 # ---------------------------------------------------------------------------- #
 
+function Get-GitHubReleaseList {
+    <# Releases d'un depot, de la plus recente a la plus ancienne. #>
+    param([Parameter(Mandatory)][string]$Repo, [int]$Count = 20)
+
+    $old = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+    try {
+        return @(Invoke-RestMethod "https://api.github.com/repos/$Repo/releases?per_page=$Count" `
+                -Headers @{ 'User-Agent' = 'me3-elden-ring-setup' })
+    }
+    catch { Fail "impossible de lister les releases de $Repo : $($_.Exception.Message)" }
+    finally { $ProgressPreference = $old }
+}
+
 function Get-GitHubReleaseAsset {
     <#
         Retourne @{ Url; File; Kind; Sha256; Version } pour une release GitHub.
@@ -1171,6 +1185,88 @@ ip_country=FR
 #  Voir https://github.com/garyttierney/me3/discussions/435
 # ---------------------------------------------------------------------------- #
 
+# ---------------------------------------------------------------------------- #
+#  Liste blanche des versions
+#
+#  L'auteur du mod maintient un fichier VERSION a la racine de son depot, que le
+#  mod telecharge au lancement. Chaque ligne vaut "<version> <0|1>", 0 signifiant
+#  que la version est refusee. Une version refusee affiche « This version of
+#  Seamless Co-op is out of date » et le mod ne demarre pas.
+#
+#  On lit donc cette liste AVANT d'installer, pour choisir une version qui
+#  fonctionnera, ou pour le dire clairement quand aucune n'est disponible.
+# ---------------------------------------------------------------------------- #
+
+$script:ErscVersionUrl = 'https://raw.githubusercontent.com/yuiamoroll/EldenRingSeamlessCoopRelease/main/VERSION'
+
+function ConvertTo-ErscVersionKey {
+    <# 'v1.9.8' -> '1.98', la forme utilisee dans le fichier VERSION. #>
+    param([string]$Tag)
+    $p = ($Tag -replace '^v', '') -split '\.'
+    if ($p.Count -lt 3) { return ($Tag -replace '^v', '') }
+    return "$($p[0]).$($p[1])$($p[2])"
+}
+
+function Get-ErscVersionPolicy {
+    <# @{ Exact = @{cle=$bool}; Above = @(@{Ver;Ok}) }, ou $null si indisponible. #>
+    $old = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+    try {
+        $raw = (Invoke-WebRequest $script:ErscVersionUrl -UseBasicParsing `
+                -Headers @{ 'User-Agent' = 'me3-elden-ring-setup' }).Content
+    }
+    catch {
+        # Liste inaccessible : on n'empeche pas l'installation pour autant.
+        Write-Log 'liste des versions autorisees inaccessible, controle ignore' -Level Warn
+        return $null
+    }
+    finally { $ProgressPreference = $old }
+
+    $exact = @{}
+    $above = New-Object System.Collections.Generic.List[hashtable]
+    foreach ($line in ($raw -split "`r?`n")) {
+        $t = $line.Trim()
+        if (-not $t) { continue }
+        $p = $t -split '\s+'
+        if ($p.Count -lt 2) { continue }
+        $ok = ($p[1] -eq '1')
+        if ($p[0].StartsWith('>')) {
+            # InvariantCulture : en francais, [double]'1.99' donnerait 199.
+            $n = 0.0
+            if ([double]::TryParse($p[0].Substring(1), [Globalization.NumberStyles]::Float,
+                    [Globalization.CultureInfo]::InvariantCulture, [ref]$n)) {
+                $above.Add(@{ Ver = $n; Ok = $ok })
+            }
+        }
+        else { $exact[$p[0]] = $ok }
+    }
+    return @{ Exact = $exact; Above = @($above) }
+}
+
+function Test-ErscVersionAllowed {
+    <# $true / $false, ou $null quand la liste ne tranche pas. #>
+    param($Policy, [string]$Tag)
+    if (-not $Policy) { return $null }
+
+    $key = ConvertTo-ErscVersionKey $Tag
+    if ($Policy.Exact.ContainsKey($key)) { return $Policy.Exact[$key] }
+
+    $n = 0.0
+    if (-not [double]::TryParse($key, [Globalization.NumberStyles]::Float,
+            [Globalization.CultureInfo]::InvariantCulture, [ref]$n)) { return $null }
+    foreach ($r in $Policy.Above) { if ($n -gt $r.Ver) { return $r.Ok } }
+    return $null
+}
+
+function Get-ErscMinimumAllowed {
+    <# Seuil au-dessus duquel les versions sont acceptees, pour le message. #>
+    param($Policy)
+    if (-not $Policy) { return $null }
+    $ok = @($Policy.Above | Where-Object { $_.Ok })
+    if (-not $ok.Count) { return $null }
+    return ($ok | Sort-Object { $_.Ver } | Select-Object -First 1).Ver
+}
+
 Register-Me3Module @{
     Key     = 'seamless-coop'
     Name    = 'Seamless Co-op'
@@ -1227,6 +1323,9 @@ Register-Me3Module @{
         $archive = "$($ctx.Options.ErscArchive)".Trim()
         $wanted = "$($ctx.Options.ErscVersion)".Trim()
         if (-not $wanted) { $wanted = 'latest' }
+        # $null tant qu'on ne sait pas : une archive fournie a la main n'est pas
+        # verifiable, son numero de version nous echappe.
+        $allowed = $null
 
         if ($archive) {
             if (-not (Test-Path -LiteralPath $archive)) { Fail "archive Seamless Co-op introuvable : $archive" }
@@ -1235,9 +1334,41 @@ Register-Me3Module @{
             $src = Expand-Download @{ Kind = 'zip'; File = (Split-Path $archive -Leaf) } $archive $m.Key
         }
         else {
+            $policy = Get-ErscVersionPolicy
+
+            if ($wanted -eq 'latest') {
+                # On ne prend pas betement la plus recente : on prend la plus
+                # recente que l'auteur autorise encore.
+                $releases = Get-GitHubReleaseList -Repo $m.Repo
+                $pick = $null
+                foreach ($r in $releases) {
+                    if ((Test-ErscVersionAllowed $policy $r.tag_name) -ne $false) { $pick = $r; break }
+                }
+                if ($pick) {
+                    $wanted = $pick.tag_name
+                    Write-Log "version retenue : $wanted"
+                }
+                else {
+                    $wanted = $releases[0].tag_name
+                    $min = Get-ErscMinimumAllowed $policy
+                    Write-Log 'AUCUNE version du miroir GitHub n''est encore autorisee par l''auteur.' -Level Warn
+                    if ($min) { Write-Log "il faut une version superieure a $min ; la plus recente du miroir est $wanted." -Level Warn }
+                    Write-Log 'Le mod refusera de demarrer avec le message « out of date ».' -Level Warn
+                    Write-Log 'Recupere l''archive sur https://www.nexusmods.com/eldenring/mods/510?tab=files (Manual Download),' -Level Warn
+                    Write-Log 'puis relance en mode Reparer avec son chemin dans le reglage « Archive .zip ».' -Level Warn
+                }
+            }
+            else {
+                if ((Test-ErscVersionAllowed $policy $wanted) -eq $false) {
+                    Write-Log "la version $wanted est refusee par l'auteur du mod : elle ne demarrera pas." -Level Warn
+                    $min = Get-ErscMinimumAllowed $policy
+                    if ($min) { Write-Log "il faut une version superieure a $min." -Level Warn }
+                }
+            }
+
             $dl = Get-GitHubReleaseAsset -Repo $m.Repo -Tag $wanted
             $version = $dl.Version
-            if ($wanted -eq 'latest') { Write-Log "derniere version publiee : $version" }
+            $allowed = Test-ErscVersionAllowed $policy $version
             $src = Expand-Download $dl (Get-Download $dl "$($m.Name) $version") $m.Key
         }
 
@@ -1258,7 +1389,10 @@ Register-Me3Module @{
         Write-TextFile $ini $content
 
         Write-Log "$($m.Name) $version installe (mot de passe : $pass)" -Level Ok
-        return @{ Dir = $root; Password = $pass; Source = $version }
+        if ($allowed -eq $false) {
+            Write-Log 'mais cette version est refusee par l''auteur : le jeu affichera « out of date ».' -Level Warn
+        }
+        return @{ Dir = $root; Password = $pass; Source = $version; VersionAllowed = $allowed }
     }
 
     Uninstall = {
@@ -1612,6 +1746,12 @@ function Write-ResultSummary {
             Write-Log ''
             Write-Log 'ATTENTION : les regles de pare-feu n''ont pas pu etre creees.'
             Write-Log 'Relance en mode Reparer et accepte l''invite, sinon personne ne te trouvera.'
+        }
+        if ($st.ContainsKey('VersionAllowed') -and $st['VersionAllowed'] -eq $false) {
+            Write-Log ''
+            Write-Log 'ATTENTION : la version installee de Seamless Co-op est refusee par son auteur.'
+            Write-Log 'Le jeu affichera « out of date » et le mod ne demarrera pas.'
+            Write-Log 'Recupere l''archive courante sur Nexus, puis renseigne le reglage « Archive .zip ».'
         }
     }
     Write-Log ''

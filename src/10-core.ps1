@@ -247,6 +247,20 @@ function Invoke-Elevated {
 #  Co-op le fait) doivent pouvoir suivre automatiquement.
 # ---------------------------------------------------------------------------- #
 
+function Get-GitHubReleaseList {
+    <# Releases d'un depot, de la plus recente a la plus ancienne. #>
+    param([Parameter(Mandatory)][string]$Repo, [int]$Count = 20)
+
+    $old = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+    try {
+        return @(Invoke-RestMethod "https://api.github.com/repos/$Repo/releases?per_page=$Count" `
+                -Headers @{ 'User-Agent' = 'me3-elden-ring-setup' })
+    }
+    catch { Fail "impossible de lister les releases de $Repo : $($_.Exception.Message)" }
+    finally { $ProgressPreference = $old }
+}
+
 function Get-GitHubReleaseAsset {
     <#
         Retourne @{ Url; File; Kind; Sha256; Version } pour une release GitHub.
